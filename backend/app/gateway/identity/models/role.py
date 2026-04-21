@@ -7,6 +7,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.gateway.identity.models.base import Base
 
+# user_roles needs a nullable tenant_id (NULL means platform-scoped grant),
+# but Postgres primary keys must be NOT NULL. We therefore use a surrogate
+# BIGINT id primary key plus a unique constraint on the logical tuple, and a
+# partial unique index (in the migration) to enforce singleton platform grants.
+
 
 class Permission(Base):
     __tablename__ = "permissions"
@@ -38,8 +43,10 @@ class RolePermission(Base):
 
 class UserRole(Base):
     __tablename__ = "user_roles"
+    __table_args__ = (UniqueConstraint("user_id", "tenant_id", "role_id", name="uq_user_roles_tuple"),)
 
-    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("identity.users.id", ondelete="CASCADE"), primary_key=True)
-    tenant_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("identity.tenants.id", ondelete="CASCADE"), primary_key=True, nullable=True)
-    role_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("identity.roles.id"), primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("identity.users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("identity.tenants.id", ondelete="CASCADE"), nullable=True, index=True)
+    role_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("identity.roles.id"), nullable=False)
     granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

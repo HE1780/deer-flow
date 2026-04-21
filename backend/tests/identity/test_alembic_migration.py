@@ -13,8 +13,9 @@ async def test_upgrade_then_downgrade(pg_url, monkeypatch):
 
     get_identity_settings.cache_clear()
 
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", pg_url)
@@ -27,11 +28,7 @@ async def test_upgrade_then_downgrade(pg_url, monkeypatch):
 
     engine = create_async_engine(pg_url)
     async with engine.connect() as conn:
-        rows = (
-            await conn.execute(
-                text("SELECT tablename FROM pg_tables WHERE schemaname = 'identity' ORDER BY tablename")
-            )
-        ).all()
+        rows = (await conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'identity' ORDER BY tablename"))).all()
     await engine.dispose()
 
     table_names = {r[0] for r in rows}
@@ -56,9 +53,7 @@ async def test_upgrade_then_downgrade(pg_url, monkeypatch):
     # should remain in the identity schema; all app tables are gone.
     engine = create_async_engine(pg_url)
     async with engine.connect() as conn:
-        rows = (
-            await conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'identity'"))
-        ).all()
+        rows = (await conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'identity'"))).all()
     await engine.dispose()
     remaining = {r[0] for r in rows}
     assert remaining <= {"alembic_version"}, f"unexpected tables after downgrade: {remaining}"

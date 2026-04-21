@@ -110,12 +110,18 @@ def upgrade() -> None:
 
     op.create_table(
         "user_roles",
-        sa.Column("user_id", sa.BigInteger, sa.ForeignKey("identity.users.id", ondelete="CASCADE"), primary_key=True),
-        sa.Column("tenant_id", sa.BigInteger, sa.ForeignKey("identity.tenants.id", ondelete="CASCADE"), primary_key=True, nullable=True),
-        sa.Column("role_id", sa.BigInteger, sa.ForeignKey("identity.roles.id"), primary_key=True),
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+        sa.Column("user_id", sa.BigInteger, sa.ForeignKey("identity.users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("tenant_id", sa.BigInteger, sa.ForeignKey("identity.tenants.id", ondelete="CASCADE"), nullable=True),
+        sa.Column("role_id", sa.BigInteger, sa.ForeignKey("identity.roles.id"), nullable=False),
         sa.Column("granted_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.UniqueConstraint("user_id", "tenant_id", "role_id", name="uq_user_roles_tuple"),
         schema="identity",
     )
+    op.create_index("ix_user_roles_user_id", "user_roles", ["user_id"], schema="identity")
+    op.create_index("ix_user_roles_tenant_id", "user_roles", ["tenant_id"], schema="identity")
+    # Platform-admin rows have NULL tenant_id; enforce at-most-one platform grant
+    # per (user, role) via a partial unique index (SQL standard treats NULLs as distinct).
     op.execute("""
         CREATE UNIQUE INDEX uq_user_roles_platform
         ON identity.user_roles (user_id, role_id)

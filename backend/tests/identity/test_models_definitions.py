@@ -57,9 +57,13 @@ def test_role_permission_composite_pk():
     assert pk_cols == {"role_id", "permission_id"}
 
 
-def test_user_role_composite_pk():
+def test_user_role_tuple_unique():
+    # Surrogate `id` PK plus a unique constraint on the logical tuple so that
+    # `tenant_id` can stay nullable for platform-scoped grants.
     pk_cols = {c.name for c in UserRole.__table__.primary_key.columns}
-    assert pk_cols == {"user_id", "tenant_id", "role_id"}
+    assert pk_cols == {"id"}
+    uniques = {tuple(sorted(c.name for c in constraint.columns)) for constraint in UserRole.__table__.constraints if constraint.__class__.__name__ == "UniqueConstraint"}
+    assert ("role_id", "tenant_id", "user_id") in uniques
 
 
 def test_workspace_member_composite_pk():
