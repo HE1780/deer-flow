@@ -12,7 +12,11 @@ from app.gateway.identity.settings import get_identity_settings
 
 config = context.config
 if config.config_file_name:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False prevents fileConfig from disabling all
+    # loggers defined outside alembic.ini — important during pytest runs where
+    # test fixtures rely on caplog being able to capture warnings from
+    # unrelated loggers (e.g. deerflow.tools.tools).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", get_identity_settings().database_url)
 

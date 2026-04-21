@@ -4,6 +4,7 @@ Integration fixtures skip gracefully if Docker/testcontainers is unavailable
 (`IDENTITY_TEST_BACKEND=off`) so `make test` stays green on laptops.
 """
 
+import inspect
 import os
 from collections.abc import AsyncIterator, Iterator
 
@@ -12,6 +13,21 @@ import pytest_asyncio
 
 _BACKEND = os.environ.get("IDENTITY_TEST_BACKEND", "auto").lower()
 _SKIP_REASON = "set IDENTITY_TEST_BACKEND=on (or install docker + testcontainers) to run integration tests"
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-mark async test functions under tests/identity/ with @pytest.mark.asyncio.
+
+    This gives us pytest-asyncio "auto" mode scoped to identity tests only,
+    without flipping the global asyncio_mode — which would affect warning
+    capture in other legacy tests.
+    """
+    for item in items:
+        if "tests/identity/" not in str(item.fspath):
+            continue
+        func = getattr(item, "function", None)
+        if func is not None and inspect.iscoroutinefunction(func) and not item.get_closest_marker("asyncio"):
+            item.add_marker(pytest.mark.asyncio)
 
 
 def _skip_if_no_docker():
