@@ -73,6 +73,9 @@ async def test_state_stored_with_ttl(client, redis_client):
 
 @pytest.mark.asyncio
 async def test_callback_happy_path(client, mock_idp):
+    # Pin user on the session-scoped mock IdP (other tests may mutate it).
+    mock_idp.idp.set_user(email="user@mock.com", subject="mock-sub-123")
+
     # Drive the login-redirect → IdP /authorize → extract code
     url = await client.login_redirect(redirect_uri="http://localhost/cb", next_url=None)
     state = parse_qs(urlparse(url).query)["state"][0]

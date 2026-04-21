@@ -25,8 +25,10 @@ from app.gateway.identity.models.user import User
 @pytest_asyncio.fixture
 async def fresh_db(pg_url, monkeypatch):
     monkeypatch.setenv("DEERFLOW_DATABASE_URL", pg_url)
+    from app.gateway.identity.settings import get_identity_settings
     from sqlalchemy.ext.asyncio import create_async_engine
 
+    get_identity_settings.cache_clear()
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", pg_url)
     await asyncio.to_thread(command.upgrade, cfg, "head")
@@ -36,6 +38,7 @@ async def fresh_db(pg_url, monkeypatch):
     finally:
         await engine.dispose()
         await asyncio.to_thread(command.downgrade, cfg, "base")
+        get_identity_settings.cache_clear()
 
 
 @pytest_asyncio.fixture

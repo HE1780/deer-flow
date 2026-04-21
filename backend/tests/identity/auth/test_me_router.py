@@ -31,6 +31,9 @@ from app.gateway.identity.routers import me as me_router_module
 @pytest_asyncio.fixture
 async def fresh_db_seeded(pg_url, monkeypatch):
     monkeypatch.setenv("DEERFLOW_DATABASE_URL", pg_url)
+    from app.gateway.identity.settings import get_identity_settings
+
+    get_identity_settings.cache_clear()
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", pg_url)
     await asyncio.to_thread(command.upgrade, cfg, "head")

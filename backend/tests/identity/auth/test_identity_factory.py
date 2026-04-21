@@ -23,6 +23,9 @@ from app.gateway.identity.bootstrap import bootstrap
 async def seeded_db(pg_url, monkeypatch):
     """Migrated + bootstrapped db, with no platform admin."""
     monkeypatch.setenv("DEERFLOW_DATABASE_URL", pg_url)
+    from app.gateway.identity.settings import get_identity_settings
+
+    get_identity_settings.cache_clear()
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", pg_url)
     await asyncio.to_thread(command.upgrade, cfg, "head")
