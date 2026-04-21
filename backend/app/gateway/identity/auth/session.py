@@ -19,7 +19,7 @@ import hashlib
 import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def _hash_refresh(token: str) -> str:
@@ -70,7 +70,7 @@ class SessionStore:
         ua: str | None,
     ) -> SessionRecord:
         sid = uuid.uuid4().hex
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         refresh_hash = _hash_refresh(refresh_token)
         data = {
             "user_id": str(user_id),

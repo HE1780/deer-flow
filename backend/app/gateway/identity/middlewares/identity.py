@@ -23,7 +23,6 @@ import logging
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
 
 from app.gateway.identity.auth.api_token import verify_api_token
 from app.gateway.identity.auth.identity import Identity

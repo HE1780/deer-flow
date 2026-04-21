@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from urllib.parse import urlencode
 
 import httpx
-from authlib.jose import JsonWebKey, jwt as authlib_jwt
+from authlib.jose import JsonWebKey
+from authlib.jose import jwt as authlib_jwt
 from authlib.jose.errors import JoseError
 
 from app.gateway.identity.auth.config import OIDCProviderConfig

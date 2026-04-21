@@ -32,7 +32,7 @@ class Identity:
     session_id: str | None = None
 
     @classmethod
-    def anonymous(cls) -> "Identity":
+    def anonymous(cls) -> Identity:
         return cls(
             token_type="anonymous",
             user_id=None,

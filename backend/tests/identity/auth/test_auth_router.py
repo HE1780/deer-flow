@@ -14,7 +14,6 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 import pytest_asyncio
-from alembic import command
 from alembic.config import Config
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -22,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from alembic import command
 from app.gateway.identity.auth.config import OIDCProviderConfig
 from app.gateway.identity.auth.lockout import LoginLockout
 from app.gateway.identity.auth.oidc import OIDCClient
@@ -72,10 +72,12 @@ def rsa_keys():
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption(),
         ).decode(),
-        priv.public_key().public_bytes(
+        priv.public_key()
+        .public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        ).decode(),
+        )
+        .decode(),
     )
 
 
@@ -173,9 +175,7 @@ async def test_full_oidc_flow_sets_cookie(app_handle):
     qs = parse_qs(parsed.query)
 
     async with _client(app_handle.app) as c:
-        r = await c.get(
-            f"/api/auth/oidc/mock/callback?code={qs['code'][0]}&state={qs['state'][0]}"
-        )
+        r = await c.get(f"/api/auth/oidc/mock/callback?code={qs['code'][0]}&state={qs['state'][0]}")
     assert r.status_code == 302
     assert "deerflow_session" in r.headers.get("set-cookie", "")
 

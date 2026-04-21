@@ -161,10 +161,14 @@ def ensure_rsa_keypair(private_path: str, public_path: str, *, key_size: int = 2
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     ).decode()
-    pub_pem = priv.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    pub_pem = (
+        priv.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
 
     priv_p.write_text(priv_pem)
     pub_p.write_text(pub_pem)

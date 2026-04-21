@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import time
-from pathlib import Path
 
 import pytest
 from cryptography.hazmat.backends import default_backend
@@ -32,10 +31,14 @@ def rsa_keys() -> tuple[str, str]:
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     ).decode()
-    pub_pem = priv.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    pub_pem = (
+        priv.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
     return priv_pem, pub_pem
 
 
@@ -107,10 +110,14 @@ def test_wrong_signature_raises(rsa_keys):
     priv, _ = rsa_keys
     # Generate a *different* keypair; use its public key for verification.
     other = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
-    other_pub = other.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    other_pub = (
+        other.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
     token = issue_access_token(_claims(), private_key_pem=priv)
     with pytest.raises(InvalidSignatureError):
         verify_access_token(token, public_key_pem=other_pub, issuer="deerflow", audience="deerflow-api")

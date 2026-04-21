@@ -9,7 +9,6 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 import pytest_asyncio
-from alembic import command
 from alembic.config import Config
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -17,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from alembic import command
 from app.gateway.identity.auth.config import OIDCProviderConfig
 from app.gateway.identity.auth.lockout import LoginLockout
 from app.gateway.identity.auth.oidc import OIDCClient
@@ -67,10 +67,14 @@ async def app_handle(mock_idp, redis_client, fresh_db_seeded):
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     ).decode()
-    pub_pem = priv.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    pub_pem = (
+        priv.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
     prefix = f"test-{uuid.uuid4().hex[:8]}"
     session_store = SessionStore(redis_client, refresh_ttl_sec=3600, key_prefix=prefix)
     lockout = LoginLockout(redis_client, max_attempts=99, window_sec=60, block_sec=60, key_prefix=prefix)

@@ -21,7 +21,7 @@ from __future__ import annotations
 import base64
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from passlib.hash import bcrypt
 from sqlalchemy import select, update
@@ -110,15 +110,11 @@ async def verify_api_token(
     if len(prefix) != _PREFIX_LEN:
         return None
 
-    rows = (
-        await session.execute(
-            select(ApiToken).where(ApiToken.prefix == prefix, ApiToken.revoked_at.is_(None))
-        )
-    ).scalars().all()
+    rows = (await session.execute(select(ApiToken).where(ApiToken.prefix == prefix, ApiToken.revoked_at.is_(None)))).scalars().all()
     if not rows:
         return None
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for row in rows:
         if row.expires_at is not None and row.expires_at <= now:
             continue
@@ -128,11 +124,7 @@ async def verify_api_token(
         except ValueError:
             continue
         # Match found. Update last-used metadata.
-        await session.execute(
-            update(ApiToken)
-            .where(ApiToken.id == row.id)
-            .values(last_used_at=now, last_used_ip=client_ip)
-        )
+        await session.execute(update(ApiToken).where(ApiToken.id == row.id).values(last_used_at=now, last_used_ip=client_ip))
         return Identity(
             token_type="api_token",
             user_id=row.user_id,
@@ -153,9 +145,5 @@ async def revoke_api_token(
     by_user_id: int,
 ) -> None:
     """Mark the token revoked_at = now (idempotent; no-op if already revoked)."""
-    await session.execute(
-        update(ApiToken)
-        .where(ApiToken.id == token_id, ApiToken.revoked_at.is_(None))
-        .values(revoked_at=datetime.now(timezone.utc))
-    )
+    await session.execute(update(ApiToken).where(ApiToken.id == token_id, ApiToken.revoked_at.is_(None)).values(revoked_at=datetime.now(UTC)))
     await session.commit()

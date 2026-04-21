@@ -11,17 +11,17 @@ import asyncio
 import time
 import uuid
 
+import httpx
 import pytest
 import pytest_asyncio
-from alembic import command
 from alembic.config import Config
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-import httpx
 from fastapi import FastAPI, Request
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from alembic import command
 from app.gateway.identity.auth.api_token import create_api_token
 from app.gateway.identity.auth.jwt import AccessTokenClaims, issue_access_token
 from app.gateway.identity.auth.session import SessionStore
@@ -38,10 +38,14 @@ def rsa_pair():
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     ).decode()
-    pub_pem = priv.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    pub_pem = (
+        priv.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
     return priv_pem, pub_pem
 
 
@@ -180,8 +184,17 @@ async def test_valid_jwt_but_session_revoked(rsa_pair, session_store, session_ma
     await session_store.revoke(rec.sid)
     now = int(time.time())
     claims = AccessTokenClaims(
-        sub="1", email="u@x.com", tid=1, wids=[], permissions=[],
-        roles={}, sid=rec.sid, iat=now, exp=now + 900, iss="deerflow", aud="deerflow-api",
+        sub="1",
+        email="u@x.com",
+        tid=1,
+        wids=[],
+        permissions=[],
+        roles={},
+        sid=rec.sid,
+        iat=now,
+        exp=now + 900,
+        iss="deerflow",
+        aud="deerflow-api",
     )
     token = issue_access_token(claims, private_key_pem=priv)
     async with _async_client(_build_app(pub, session_store, session_maker)) as c:
@@ -195,9 +208,17 @@ async def test_expired_jwt_is_anonymous(rsa_pair, session_store, session_maker):
     rec = await session_store.create(user_id=1, tenant_id=1, refresh_token="rt", ip=None, ua=None)
     now = int(time.time())
     claims = AccessTokenClaims(
-        sub="1", email="u@x.com", tid=1, wids=[], permissions=[],
-        roles={}, sid=rec.sid, iat=now - 2000, exp=now - 1000,
-        iss="deerflow", aud="deerflow-api",
+        sub="1",
+        email="u@x.com",
+        tid=1,
+        wids=[],
+        permissions=[],
+        roles={},
+        sid=rec.sid,
+        iat=now - 2000,
+        exp=now - 1000,
+        iss="deerflow",
+        aud="deerflow-api",
     )
     token = issue_access_token(claims, private_key_pem=priv)
     async with _async_client(_build_app(pub, session_store, session_maker)) as c:
@@ -241,9 +262,17 @@ async def test_cookie_auth_equivalent_to_bearer(rsa_pair, session_store, session
     rec = await session_store.create(user_id=99, tenant_id=1, refresh_token="rt", ip=None, ua=None)
     now = int(time.time())
     claims = AccessTokenClaims(
-        sub="99", email="u@x.com", tid=1, wids=[], permissions=[],
-        roles={}, sid=rec.sid, iat=now, exp=now + 900,
-        iss="deerflow", aud="deerflow-api",
+        sub="99",
+        email="u@x.com",
+        tid=1,
+        wids=[],
+        permissions=[],
+        roles={},
+        sid=rec.sid,
+        iat=now,
+        exp=now + 900,
+        iss="deerflow",
+        aud="deerflow-api",
     )
     token = issue_access_token(claims, private_key_pem=priv)
     async with _async_client(_build_app(pub, session_store, session_maker)) as c:

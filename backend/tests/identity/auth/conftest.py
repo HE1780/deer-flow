@@ -10,12 +10,9 @@ signs id_tokens with its own RS256 key.
 from __future__ import annotations
 
 import base64
-import json
 import secrets
 import threading
 import time
-import uuid
-from contextlib import contextmanager
 
 import pytest
 import uvicorn

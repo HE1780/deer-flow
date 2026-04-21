@@ -16,7 +16,7 @@ Three pieces make up the OIDC → session flow:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,7 +37,7 @@ async def upsert_oidc_user(session: AsyncSession, info: OIDCUserInfo) -> User:
             user.email = info.email
         if info.display_name and user.display_name != info.display_name:
             user.display_name = info.display_name
-        user.last_login_at = datetime.now(timezone.utc)
+        user.last_login_at = datetime.now(UTC)
         await session.flush()
         return user
 
@@ -49,7 +49,7 @@ async def upsert_oidc_user(session: AsyncSession, info: OIDCUserInfo) -> User:
         user.oidc_subject = info.subject
         if info.display_name and not user.display_name:
             user.display_name = info.display_name
-        user.last_login_at = datetime.now(timezone.utc)
+        user.last_login_at = datetime.now(UTC)
         await session.flush()
         return user
 
@@ -60,7 +60,7 @@ async def upsert_oidc_user(session: AsyncSession, info: OIDCUserInfo) -> User:
         status=1,
         oidc_provider=info.provider,
         oidc_subject=info.subject,
-        last_login_at=datetime.now(timezone.utc),
+        last_login_at=datetime.now(UTC),
     )
     session.add(user)
     await session.flush()
@@ -74,20 +74,11 @@ async def resolve_active_tenant(
     auto_provision: bool = False,
 ) -> tuple[Tenant | None, Workspace | None]:
     # Find memberships → pick alpha-first active tenant.
-    q = (
-        select(Tenant)
-        .join(Membership, Membership.tenant_id == Tenant.id)
-        .where(Membership.user_id == user.id, Membership.status == 1)
-        .order_by(Tenant.slug)
-    )
+    q = select(Tenant).join(Membership, Membership.tenant_id == Tenant.id).where(Membership.user_id == user.id, Membership.status == 1).order_by(Tenant.slug)
     tenant = (await session.execute(q)).scalars().first()
 
     if tenant is not None:
-        ws = (
-            await session.execute(
-                select(Workspace).where(Workspace.tenant_id == tenant.id).order_by(Workspace.slug)
-            )
-        ).scalars().first()
+        ws = (await session.execute(select(Workspace).where(Workspace.tenant_id == tenant.id).order_by(Workspace.slug))).scalars().first()
         return tenant, ws
 
     if not auto_provision:
@@ -119,9 +110,13 @@ async def build_identity_for_user(
     workspace: Workspace | None,
 ) -> Identity:
     # Collect role grants relevant at login: platform (tenant_id IS NULL) + this tenant.
-    user_roles_q = select(UserRole, Role).join(Role, Role.id == UserRole.role_id).where(
-        UserRole.user_id == user.id,
-        (UserRole.tenant_id.is_(None)) | (UserRole.tenant_id == tenant.id),
+    user_roles_q = (
+        select(UserRole, Role)
+        .join(Role, Role.id == UserRole.role_id)
+        .where(
+            UserRole.user_id == user.id,
+            (UserRole.tenant_id.is_(None)) | (UserRole.tenant_id == tenant.id),
+        )
     )
     platform_roles: list[str] = []
     tenant_roles: list[str] = []
@@ -134,12 +129,7 @@ async def build_identity_for_user(
             tenant_roles.append(role.role_key)
 
     # Workspace memberships inside the active tenant.
-    ws_q = (
-        select(WorkspaceMember, Workspace, Role)
-        .join(Workspace, Workspace.id == WorkspaceMember.workspace_id)
-        .join(Role, Role.id == WorkspaceMember.role_id)
-        .where(WorkspaceMember.user_id == user.id, Workspace.tenant_id == tenant.id)
-    )
+    ws_q = select(WorkspaceMember, Workspace, Role).join(Workspace, Workspace.id == WorkspaceMember.workspace_id).join(Role, Role.id == WorkspaceMember.role_id).where(WorkspaceMember.user_id == user.id, Workspace.tenant_id == tenant.id)
     workspaces: dict[int, str] = {}
     for wm, ws, role in (await session.execute(ws_q)).all():
         workspaces[ws.id] = role.role_key
@@ -148,11 +138,7 @@ async def build_identity_for_user(
     # Flatten permissions from every role in play.
     permissions: set[str] = set()
     if role_ids:
-        perm_q = (
-            select(Permission.tag)
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .where(RolePermission.role_id.in_(role_ids))
-        )
+        perm_q = select(Permission.tag).join(RolePermission, RolePermission.permission_id == Permission.id).where(RolePermission.role_id.in_(role_ids))
         permissions = {tag for (tag,) in (await session.execute(perm_q)).all()}
 
     return Identity(

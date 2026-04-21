@@ -86,21 +86,8 @@ async def me(identity: Identity = Depends(require_authenticated)):
     rt = get_runtime()
     async with rt.session_maker() as db:
         user = (await db.execute(select(User).where(User.id == identity.user_id))).scalar_one()
-        memberships = (
-            await db.execute(
-                select(Tenant)
-                .join(Membership, Membership.tenant_id == Tenant.id)
-                .where(Membership.user_id == identity.user_id, Membership.status == 1)
-                .order_by(Tenant.slug)
-            )
-        ).scalars().all()
-        workspaces = (
-            await db.execute(
-                select(Workspace).where(Workspace.tenant_id == identity.tenant_id)
-                if identity.tenant_id
-                else select(Workspace).where(False)
-            )
-        ).scalars().all()
+        memberships = (await db.execute(select(Tenant).join(Membership, Membership.tenant_id == Tenant.id).where(Membership.user_id == identity.user_id, Membership.status == 1).order_by(Tenant.slug))).scalars().all()
+        workspaces = (await db.execute(select(Workspace).where(Workspace.tenant_id == identity.tenant_id) if identity.tenant_id else select(Workspace).where(False))).scalars().all()
 
     return MeResponse(
         user_id=user.id,
@@ -146,11 +133,7 @@ async def switch_tenant(
         if (await db.execute(q)).scalar_one_or_none() is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "not a member of this tenant")
         tenant = (await db.execute(select(Tenant).where(Tenant.id == body.tenant_id))).scalar_one()
-        ws = (
-            await db.execute(
-                select(Workspace).where(Workspace.tenant_id == tenant.id).order_by(Workspace.slug)
-            )
-        ).scalars().first()
+        ws = (await db.execute(select(Workspace).where(Workspace.tenant_id == tenant.id).order_by(Workspace.slug))).scalars().first()
         user = (await db.execute(select(User).where(User.id == identity.user_id))).scalar_one()
         new_identity = await build_identity_for_user(db, user, tenant, ws)
 
@@ -178,13 +161,7 @@ async def switch_tenant(
 async def list_tokens(identity: Identity = Depends(require_authenticated)):
     rt = get_runtime()
     async with rt.session_maker() as db:
-        rows = (
-            await db.execute(
-                select(ApiToken)
-                .where(ApiToken.user_id == identity.user_id, ApiToken.revoked_at.is_(None))
-                .order_by(ApiToken.created_at.desc())
-            )
-        ).scalars().all()
+        rows = (await db.execute(select(ApiToken).where(ApiToken.user_id == identity.user_id, ApiToken.revoked_at.is_(None)).order_by(ApiToken.created_at.desc()))).scalars().all()
     return [
         TokenListItem(
             id=r.id,
@@ -236,10 +213,7 @@ async def revoke_token(token_id: int, identity: Identity = Depends(require_authe
 async def list_sessions(identity: Identity = Depends(require_authenticated)):
     rt = get_runtime()
     records = await rt.session_store.list_for_user(identity.user_id)
-    return [
-        SessionListItem(sid=r.sid, created_at=r.created_at, ip=r.ip, user_agent=r.user_agent)
-        for r in records
-    ]
+    return [SessionListItem(sid=r.sid, created_at=r.created_at, ip=r.ip, user_agent=r.user_agent) for r in records]
 
 
 @router.delete("/sessions/{sid}")

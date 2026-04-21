@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
-from alembic import command
 from alembic.config import Config
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from alembic import command
 from app.gateway.identity.auth.api_token import (
     CreatedToken,
     create_api_token,
@@ -25,8 +25,9 @@ from app.gateway.identity.models.user import User
 @pytest_asyncio.fixture
 async def fresh_db(pg_url, monkeypatch):
     monkeypatch.setenv("DEERFLOW_DATABASE_URL", pg_url)
-    from app.gateway.identity.settings import get_identity_settings
     from sqlalchemy.ext.asyncio import create_async_engine
+
+    from app.gateway.identity.settings import get_identity_settings
 
     get_identity_settings.cache_clear()
     cfg = Config("alembic.ini")
@@ -89,8 +90,9 @@ async def test_plaintext_not_stored(seeded_session):
         expires_at=None,
         created_by=user.id,
     )
-    from app.gateway.identity.models.token import ApiToken
     from sqlalchemy import select
+
+    from app.gateway.identity.models.token import ApiToken
 
     row = (await session.execute(select(ApiToken).where(ApiToken.id == created.token_id))).scalar_one()
     assert row.prefix == created.prefix
@@ -141,7 +143,7 @@ async def test_verify_wrong_secret_returns_none(seeded_session):
 @pytest.mark.asyncio
 async def test_verify_expired_returns_none(seeded_session):
     session, user, tenant, ws = seeded_session
-    past = datetime.now(timezone.utc) - timedelta(hours=1)
+    past = datetime.now(UTC) - timedelta(hours=1)
     created = await create_api_token(
         session,
         user_id=user.id,
@@ -207,12 +209,24 @@ async def test_verify_prefix_collision_picks_matching_hash(seeded_session, monke
     monkeypatch.setattr(mod, "_generate_token", fixed_prefix)
 
     t1 = await create_api_token(
-        session, user_id=user.id, tenant_id=tenant.id, workspace_id=None,
-        name="one", scopes=["a"], expires_at=None, created_by=user.id,
+        session,
+        user_id=user.id,
+        tenant_id=tenant.id,
+        workspace_id=None,
+        name="one",
+        scopes=["a"],
+        expires_at=None,
+        created_by=user.id,
     )
     t2 = await create_api_token(
-        session, user_id=user.id, tenant_id=tenant.id, workspace_id=None,
-        name="two", scopes=["b"], expires_at=None, created_by=user.id,
+        session,
+        user_id=user.id,
+        tenant_id=tenant.id,
+        workspace_id=None,
+        name="two",
+        scopes=["b"],
+        expires_at=None,
+        created_by=user.id,
     )
     assert t1.prefix == t2.prefix
     monkeypatch.setattr(mod, "_generate_token", real_gen)
@@ -236,8 +250,9 @@ async def test_verify_updates_last_used(seeded_session):
         expires_at=None,
         created_by=user.id,
     )
-    from app.gateway.identity.models.token import ApiToken
     from sqlalchemy import select
+
+    from app.gateway.identity.models.token import ApiToken
 
     before = (await session.execute(select(ApiToken).where(ApiToken.id == created.token_id))).scalar_one().last_used_at
     assert before is None

@@ -6,10 +6,10 @@ import asyncio
 
 import pytest
 import pytest_asyncio
-from alembic import command
 from alembic.config import Config
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from alembic import command
 from app.gateway.identity.auth.identity_factory import (
     build_identity_for_user,
     resolve_active_tenant,
@@ -125,10 +125,12 @@ async def test_resolve_active_tenant_existing_membership(seeded_db):
         s.add_all([tz, ta])
         await s.flush()
         s.add(Workspace(tenant_id=ta.id, slug="w", name="Alpha WS"))
-        s.add_all([
-            Membership(user_id=user.id, tenant_id=tz.id),
-            Membership(user_id=user.id, tenant_id=ta.id),
-        ])
+        s.add_all(
+            [
+                Membership(user_id=user.id, tenant_id=tz.id),
+                Membership(user_id=user.id, tenant_id=ta.id),
+            ]
+        )
         await s.commit()
         tenant, ws = await resolve_active_tenant(s, user)
         assert tenant.slug == "alpha"
@@ -139,6 +141,7 @@ async def test_build_identity_flattens_permissions(seeded_db):
     """workspace_admin role → all workspace permissions in the Identity."""
     maker = async_sessionmaker(seeded_db, expire_on_commit=False)
     from sqlalchemy import select
+
     from app.gateway.identity.models.role import Role
     from app.gateway.identity.models.tenant import Tenant, Workspace
     from app.gateway.identity.models.user import Membership, WorkspaceMember

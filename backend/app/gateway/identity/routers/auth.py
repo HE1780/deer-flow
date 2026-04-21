@@ -25,7 +25,6 @@ from app.gateway.identity.auth.oidc import (
     StateMismatchError,
 )
 from app.gateway.identity.auth.runtime import get_runtime
-from app.gateway.identity.settings import get_identity_settings
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +80,7 @@ async def oidc_callback(provider: str, code: str, state: str, request: Request):
     async with rt.session_maker() as db:
         user = await upsert_oidc_user(db, info)
         await db.commit()
-        tenant, workspace = await resolve_active_tenant(
-            db, user, auto_provision=rt.auto_provision
-        )
+        tenant, workspace = await resolve_active_tenant(db, user, auto_provision=rt.auto_provision)
         if tenant is None:
             return RedirectResponse("/login?error=no_membership", status_code=302)
         await db.commit()
