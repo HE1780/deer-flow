@@ -6,6 +6,10 @@ from fastapi import FastAPI
 
 from app.gateway.config import get_gateway_config
 from app.gateway.deps import langgraph_runtime
+from app.gateway.identity import db as _identity_db
+from app.gateway.identity.bootstrap import bootstrap as identity_bootstrap
+from app.gateway.identity.db import clear_global_engine, create_engine_and_sessionmaker, set_global_engine
+from app.gateway.identity.settings import get_identity_settings
 from app.gateway.routers import (
     agents,
     artifacts,
@@ -33,6 +37,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _init_identity_subsystem() -> None:
+    settings = get_identity_settings()
+    if not settings.enabled:
+        logger.info("ENABLE_IDENTITY=false; skipping identity subsystem initialization")
+        return
+
+    logger.info("ENABLE_IDENTITY=true; initializing identity subsystem")
+    engine, maker = create_engine_and_sessionmaker(settings.database_url)
+    set_global_engine(engine, maker)
+
+    async with maker() as session:
+        await identity_bootstrap(session, bootstrap_admin_email=settings.bootstrap_admin_email)
+
+
+async def _shutdown_identity_subsystem() -> None:
+    settings = get_identity_settings()
+    if not settings.enabled:
+        return
+    if _identity_db._engine is not None:
+        await _identity_db._engine.dispose()
+    clear_global_engine()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
@@ -48,6 +75,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     config = get_gateway_config()
     logger.info(f"Starting API Gateway on {config.host}:{config.port}")
 
+    # Initialize identity subsystem (no-op when ENABLE_IDENTITY=false)
+    await _init_identity_subsystem()
+
     # Initialize LangGraph runtime components (StreamBridge, RunManager, checkpointer, store)
     async with langgraph_runtime(app):
         logger.info("LangGraph runtime initialised")
@@ -61,15 +91,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception:
             logger.exception("No IM channels configured or channel service failed to start")
 
-        yield
-
-        # Stop channel service on shutdown
         try:
-            from app.channels.service import stop_channel_service
+            yield
+        finally:
+            # Stop channel service on shutdown
+            try:
+                from app.channels.service import stop_channel_service
 
-            await stop_channel_service()
-        except Exception:
-            logger.exception("Failed to stop channel service")
+                await stop_channel_service()
+            except Exception:
+                logger.exception("Failed to stop channel service")
+
+            await _shutdown_identity_subsystem()
 
     logger.info("Shutting down API Gateway")
 

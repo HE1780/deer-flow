@@ -17,10 +17,20 @@ dependencies = [
     "langgraph-sdk>=0.1.51",
     "markdown-to-mrkdwn>=0.3.1",
     "wecom-aibot-python-sdk>=0.1.6",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+    "redis[hiredis]>=5.0.0",
 ]
 
 [dependency-groups]
-dev = ["pytest>=9.0.3", "ruff>=0.14.11"]
+dev = [
+    "pytest>=9.0.3",
+    "ruff>=0.14.11",
+    "pytest-asyncio>=0.24.0",
+    "testcontainers[postgres,redis]>=4.0.0",
+]
+
 
 [tool.uv.workspace]
 members = ["packages/harness"]

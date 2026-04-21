@@ -197,6 +197,49 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
+
+  # ── Postgres (identity subsystem, optional) ────────────────────────────────
+  # Only needed when ENABLE_IDENTITY=true. Off by default so existing
+  # deployments keep working unchanged.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-deerflow}
+      POSTGRES_USER: ${POSTGRES_USER:-deerflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deerflow}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - deerflow_postgres:/var/lib/postgresql/data
+    networks:
+      - deer-flow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-deerflow} -d ${POSTGRES_DB:-deerflow}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Redis (identity subsystem, optional) ───────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - deerflow_redis:/data
+    networks:
+      - deer-flow
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
 networks:
   deer-flow:
     driver: bridge
+
+volumes:
+  deerflow_postgres:
+  deerflow_redis:

@@ -16,3 +16,16 @@ lint:
 
 format:
 	uvx ruff check . --fix && uvx ruff format .
+
+# ── Identity subsystem (M1) ────────────────────────────────────────────────
+db-upgrade:
+	PYTHONPATH=. uv run alembic upgrade head
+
+db-downgrade-one:
+	PYTHONPATH=. uv run alembic downgrade -1
+
+identity-bootstrap:
+	PYTHONPATH=. uv run python -m app.gateway.identity.cli bootstrap
+
+identity-test:
+	PYTHONPATH=. IDENTITY_TEST_BACKEND=on uv run pytest tests/identity/ -v
