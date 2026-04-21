@@ -202,6 +202,23 @@ That prompt is intended for coding agents. It tells the agent to clone the repo 
 
    </details>
 
+#### Optional: Enterprise Identity (Preview)
+
+DeerFlow includes an opt-in enterprise identity subsystem (multi-tenant, RBAC, audit). It is **off by default** — current single-user installations behave exactly as before.
+
+To enable:
+
+1. Provision Postgres 16 + Redis 7 (`docker/docker-compose.yaml` ships both as optional services).
+2. Run migrations: `cd backend && make db-upgrade`
+3. Set env vars:
+   - `ENABLE_IDENTITY=true`
+   - `DEERFLOW_DATABASE_URL=postgresql+asyncpg://...`
+   - `DEERFLOW_REDIS_URL=redis://...`
+   - `DEERFLOW_BOOTSTRAP_ADMIN_EMAIL=you@example.com` (optional — creates the first platform admin)
+4. Start the gateway normally. Bootstrap runs idempotently at startup.
+
+Full roadmap and design: [`docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`](docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md).
+
 ### Running the Application
 
 #### Deployment Sizing

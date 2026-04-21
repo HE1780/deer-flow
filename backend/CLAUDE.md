@@ -295,6 +295,34 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 - **Injection**: Enabled skills listed in agent system prompt with container paths
 - **Installation**: `POST /api/skills/install` extracts .skill ZIP archive to custom/ directory
 
+### Identity Subsystem (`app/gateway/identity/`)
+
+**Status:** M1 scaffold landed. Gated behind `ENABLE_IDENTITY` env var (default off).
+
+**Components** (M1 scope):
+- `settings.py` — reads `ENABLE_IDENTITY`, `DEERFLOW_DATABASE_URL`, `DEERFLOW_REDIS_URL`, `DEERFLOW_BOOTSTRAP_ADMIN_EMAIL`
+- `models/` — 11 ORM tables matching spec §4 (tenants, users, memberships, workspaces, permissions, roles, role_permissions, user_roles, workspace_members, api_tokens, audit_logs)
+- `db.py` — async engine, session factory, `get_session()` dependency
+- `context.py` — `current_identity` / `current_tenant_id` ContextVars (used by M3+)
+- `bootstrap.py` — idempotent seed (roles, permissions, default tenant/workspace, first admin)
+- `cli.py` — `python -m app.gateway.identity.cli bootstrap`
+
+**Schema migration:**
+```bash
+make db-upgrade           # run alembic migrations
+make db-downgrade-one     # rollback one revision
+make identity-bootstrap   # run bootstrap seed manually
+make identity-test        # run identity test suite (needs postgres+redis)
+```
+
+**When flag is OFF:** identity subsystem is completely inert. No DB connection attempted, no middleware registered, legacy endpoints unchanged. Verified by `tests/identity/test_feature_flag_offline.py`.
+
+**When flag is ON:** gateway lifespan initializes engine + session factory, runs `bootstrap()`, then proceeds with LangGraph runtime. Bootstrap is idempotent (safe to restart).
+
+**Note on `user_roles` table:** `tenant_id` is nullable (NULL = platform-scoped grant, e.g. `platform_admin`). Since Postgres PK columns must be NOT NULL, `user_roles` uses a surrogate `id` primary key plus `UNIQUE(user_id, tenant_id, role_id)` and a partial unique index to enforce at-most-one platform grant per (user, role).
+
+**Roadmap:** M2 adds auth (OIDC + JWT + API token), M3 adds RBAC middleware, M4 adds storage isolation, M5 adds LangGraph integration, M6 adds audit writer, M7 adds admin UI + migration script. See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
+
 ### Model Factory (`packages/harness/deerflow/models/factory.py`)
 
 - `create_chat_model(name, thinking_enabled)` instantiates LLM from config via reflection
