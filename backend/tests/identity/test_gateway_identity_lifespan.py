@@ -58,3 +58,36 @@ async def test_flag_on_inits_engine_and_bootstraps(monkeypatch, pg_url):
         await _shutdown_identity_subsystem()
     finally:
         await asyncio.to_thread(command.downgrade, cfg, "base")
+
+
+def test_auth_routes_absent_when_flag_off(monkeypatch):
+    """When ENABLE_IDENTITY=false, /api/auth/* + /api/me must not be registered."""
+    monkeypatch.setenv("ENABLE_IDENTITY", "false")
+    from app.gateway.identity.settings import get_identity_settings
+
+    get_identity_settings.cache_clear()
+    try:
+        from app.gateway.app import create_app
+
+        app = create_app()
+        paths = {getattr(r, "path", "") for r in app.routes}
+        assert not any(p.startswith("/api/auth") for p in paths)
+        assert "/api/me" not in paths
+    finally:
+        get_identity_settings.cache_clear()
+
+
+def test_auth_routes_registered_when_flag_on(monkeypatch):
+    monkeypatch.setenv("ENABLE_IDENTITY", "true")
+    from app.gateway.identity.settings import get_identity_settings
+
+    get_identity_settings.cache_clear()
+    try:
+        from app.gateway.app import create_app
+
+        app = create_app()
+        paths = {getattr(r, "path", "") for r in app.routes}
+        assert any(p.startswith("/api/auth/oidc") for p in paths)
+        assert "/api/me" in paths
+    finally:
+        get_identity_settings.cache_clear()

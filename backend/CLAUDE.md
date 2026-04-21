@@ -297,31 +297,44 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 
 ### Identity Subsystem (`app/gateway/identity/`)
 
-**Status:** M1 scaffold landed. Gated behind `ENABLE_IDENTITY` env var (default off).
+**Status:** M1 (schema + bootstrap) and M2 (authentication) landed. Gated behind `ENABLE_IDENTITY` env var (default off).
 
-**Components** (M1 scope):
-- `settings.py` — reads `ENABLE_IDENTITY`, `DEERFLOW_DATABASE_URL`, `DEERFLOW_REDIS_URL`, `DEERFLOW_BOOTSTRAP_ADMIN_EMAIL`
+**Components**:
+- `settings.py` — reads `ENABLE_IDENTITY`, `DEERFLOW_DATABASE_URL`, `DEERFLOW_REDIS_URL`, `DEERFLOW_BOOTSTRAP_ADMIN_EMAIL`, plus M2 auth knobs (`DEERFLOW_JWT_*`, `DEERFLOW_ACCESS_TOKEN_TTL_SEC`, `DEERFLOW_REFRESH_TOKEN_TTL_SEC`, `DEERFLOW_COOKIE_*`, `DEERFLOW_LOGIN_LOCKOUT_*`, `DEERFLOW_BCRYPT_COST`, `DEERFLOW_INTERNAL_SIGNING_KEY`, `IDENTITY_AUTO_PROVISION_TENANT`)
 - `models/` — 11 ORM tables matching spec §4 (tenants, users, memberships, workspaces, permissions, roles, role_permissions, user_roles, workspace_members, api_tokens, audit_logs)
 - `db.py` — async engine, session factory, `get_session()` dependency
-- `context.py` — `current_identity` / `current_tenant_id` ContextVars (used by M3+)
+- `context.py` — `current_identity` / `current_tenant_id` / `current_session_id` ContextVars (M2 set by IdentityMiddleware; M3+ reads)
 - `bootstrap.py` — idempotent seed (roles, permissions, default tenant/workspace, first admin)
 - `cli.py` — `python -m app.gateway.identity.cli bootstrap`
+- **M2** `auth/` — `Identity` dataclass; `jwt.py` (RS256 issue/verify, refresh token generator, `ensure_rsa_keypair`); `session.py` (Redis SessionStore); `lockout.py` (LoginLockout); `api_token.py` (create/verify/revoke `dft_*` tokens, bcrypt at rest); `oidc.py` (login redirect + callback, PKCE + state + nonce in Redis); `config.py` (OIDC provider loader from `config/identity.yaml`); `identity_factory.py` (first-login upsert + tenant resolution + Identity flattening); `dependencies.py` (`require_authenticated`, `get_current_identity` FastAPI deps); `runtime.py` (shared AuthRuntime handle populated at lifespan)
+- **M2** `middlewares/identity.py` — `IdentityMiddleware`: reads `Authorization` header or session cookie, resolves to `Identity` (anonymous on failure), sets `request.state.identity` + ContextVars
+- **M2** `routers/auth.py` (`/api/auth/oidc/{provider}/login`, `/api/auth/oidc/{provider}/callback`, `/api/auth/refresh`, `/api/auth/logout`)
+- **M2** `routers/me.py` (`/api/me`, `/api/me/switch-tenant`, `/api/me/tokens`, `/api/me/sessions`, `PATCH /api/me`)
 
-**Schema migration:**
+**Schema + ops:**
 ```bash
 make db-upgrade           # run alembic migrations
 make db-downgrade-one     # rollback one revision
 make identity-bootstrap   # run bootstrap seed manually
+make identity-keys        # generate (or reuse) the M2 RS256 keypair
 make identity-test        # run identity test suite (needs postgres+redis)
 ```
 
-**When flag is OFF:** identity subsystem is completely inert. No DB connection attempted, no middleware registered, legacy endpoints unchanged. Verified by `tests/identity/test_feature_flag_offline.py`.
+**OIDC provider setup (M2):** copy `config/identity.yaml.example` to `config/identity.yaml` and fill in provider credentials. Providers listed there become available at `/api/auth/oidc/{provider}/login`. Override the path with `DEERFLOW_IDENTITY_CONFIG`.
 
-**When flag is ON:** gateway lifespan initializes engine + session factory, runs `bootstrap()`, then proceeds with LangGraph runtime. Bootstrap is idempotent (safe to restart).
+**Auth runtime (M2):** on startup with flag on, the gateway ensures an RS256 keypair on disk (default `$DEERFLOW_HOME/_system/jwt_{private,public}.pem`, 0600/0644), opens a Redis client, loads OIDC providers, and builds a shared `AuthRuntime` consumed by the middleware and routers.
+
+**Cookie flow (M2):** the access token lives in the `deerflow_session` HttpOnly cookie (`Secure` in prod, `SameSite=Lax`). The refresh token is stored server-side in Redis only. `POST /api/auth/refresh` re-issues an access token from the `sid` embedded in the current (possibly expired) token, as long as the Redis session record still exists.
+
+**When flag is OFF:** identity subsystem is completely inert. No DB connection attempted, no middleware registered, auth/me routers are not included, legacy endpoints unchanged. Verified by `tests/identity/test_feature_flag_offline.py` and `tests/identity/test_gateway_identity_lifespan.py::test_auth_routes_absent_when_flag_off`.
+
+**When flag is ON:** gateway lifespan initializes engine + session factory, runs `bootstrap()`, builds the `AuthRuntime`, and then proceeds with LangGraph runtime. Bootstrap is idempotent (safe to restart).
 
 **Note on `user_roles` table:** `tenant_id` is nullable (NULL = platform-scoped grant, e.g. `platform_admin`). Since Postgres PK columns must be NOT NULL, `user_roles` uses a surrogate `id` primary key plus `UNIQUE(user_id, tenant_id, role_id)` and a partial unique index to enforce at-most-one platform grant per (user, role).
 
-**Roadmap:** M2 adds auth (OIDC + JWT + API token), M3 adds RBAC middleware, M4 adds storage isolation, M5 adds LangGraph integration, M6 adds audit writer, M7 adds admin UI + migration script. See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
+**Note on M2 vs M3:** M2 never returns 401 from the middleware — unknown/expired/revoked credentials all resolve to `Identity.anonymous()`. M3 will add a per-route decorator (`@requires("thread:read")` etc.) that maps anonymous access to 401 and insufficient permissions to 403. Business routes added now should call `Depends(require_authenticated)` where they need an authenticated user; `require_authenticated` raises 401 on its own.
+
+**Roadmap:** M3 adds RBAC middleware, M4 adds storage isolation, M5 adds LangGraph integration, M6 adds audit writer, M7 adds admin UI + migration script. See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
 
 ### Model Factory (`packages/harness/deerflow/models/factory.py`)
 

@@ -1,0 +1,39 @@
+# DeerFlow Identity — OIDC provider configuration (template)
+#
+# Copy to `config/identity.yaml` and fill in provider credentials. The loader
+# resolves `$VAR` references against the process environment, so secrets can
+# stay in env files outside the repo.
+#
+# Only providers listed here are available at /api/auth/oidc/{provider}/login.
+
+oidc:
+  providers:
+    # Okta
+    okta:
+      issuer: https://YOUR_DOMAIN.okta.com
+      client_id: $OKTA_CLIENT_ID
+      client_secret: $OKTA_CLIENT_SECRET
+      scopes: [openid, profile, email]
+
+    # Azure AD / Entra ID
+    # azure:
+    #   issuer: https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0
+    #   client_id: $AZURE_CLIENT_ID
+    #   client_secret: $AZURE_CLIENT_SECRET
+    #   scopes: [openid, profile, email]
+
+    # Keycloak (self-hosted)
+    # keycloak:
+    #   issuer: https://YOUR_KEYCLOAK/realms/YOUR_REALM
+    #   client_id: $KC_CLIENT_ID
+    #   client_secret: $KC_CLIENT_SECRET
+    #   scopes: [openid, profile, email]
+
+    # Generic provider with explicit endpoints (no discovery)
+    # custom:
+    #   issuer: https://idp.example.com
+    #   client_id: $CUSTOM_CLIENT_ID
+    #   client_secret: $CUSTOM_CLIENT_SECRET
+    #   authorize_url: https://idp.example.com/oauth2/authorize
+    #   token_url: https://idp.example.com/oauth2/token
+    #   jwks_uri: https://idp.example.com/.well-known/jwks.json

@@ -1,0 +1,211 @@
+"""/api/auth/* routes: OIDC login / callback, refresh, logout."""
+
+from __future__ import annotations
+
+import logging
+import time
+
+from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
+
+from app.gateway.identity.auth.identity_factory import (
+    build_identity_for_user,
+    resolve_active_tenant,
+    upsert_oidc_user,
+)
+from app.gateway.identity.auth.jwt import (
+    AccessTokenClaims,
+    decode_claims_insecure,
+    generate_refresh_token,
+    issue_access_token,
+)
+from app.gateway.identity.auth.oidc import (
+    NonceMismatchError,
+    StateExpiredError,
+    StateMismatchError,
+)
+from app.gateway.identity.auth.runtime import get_runtime
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/auth", tags=["identity"])
+
+
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def _user_agent(request: Request) -> str | None:
+    return request.headers.get("user-agent")
+
+
+@router.get("/oidc/{provider}/login")
+async def oidc_login(provider: str, request: Request, next: str | None = None):
+    rt = get_runtime()
+    client = rt.oidc_clients.get(provider)
+    if client is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown provider: {provider}")
+    redirect_uri = str(request.url_for("oidc_callback", provider=provider))
+    url = await client.login_redirect(redirect_uri=redirect_uri, next_url=next)
+    return RedirectResponse(url, status_code=302)
+
+
+@router.get("/oidc/{provider}/callback", name="oidc_callback")
+async def oidc_callback(provider: str, code: str, state: str, request: Request):
+    rt = get_runtime()
+    client = rt.oidc_clients.get(provider)
+    if client is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown provider: {provider}")
+
+    # Lockout keyed on IP for the OIDC path (email unknown pre-callback).
+    ip = _client_ip(request)
+    if ip and await rt.lockout.is_blocked(ip=ip, email="_oidc_"):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many failed login attempts")
+
+    redirect_uri = str(request.url.replace(query=""))
+    try:
+        info = await client.handle_callback(code=code, state=state, redirect_uri=redirect_uri)
+    except (StateMismatchError, StateExpiredError, NonceMismatchError) as e:
+        if ip:
+            await rt.lockout.record_failure(ip=ip, email="_oidc_")
+        logger.info("oidc callback failed: %s", e)
+        return RedirectResponse("/login?error=oidc_callback_failed", status_code=302)
+    except Exception:
+        if ip:
+            await rt.lockout.record_failure(ip=ip, email="_oidc_")
+        logger.exception("oidc callback crashed")
+        return RedirectResponse("/login?error=oidc_callback_failed", status_code=302)
+
+    # Upsert + first-login policy.
+    async with rt.session_maker() as db:
+        user = await upsert_oidc_user(db, info)
+        await db.commit()
+        tenant, workspace = await resolve_active_tenant(db, user, auto_provision=rt.auto_provision)
+        if tenant is None:
+            return RedirectResponse("/login?error=no_membership", status_code=302)
+        await db.commit()
+        identity = await build_identity_for_user(db, user, tenant, workspace)
+
+    # Session + tokens.
+    refresh = generate_refresh_token()
+    sess = await rt.session_store.create(
+        user_id=identity.user_id,
+        tenant_id=identity.tenant_id,
+        refresh_token=refresh,
+        ip=ip,
+        ua=_user_agent(request),
+    )
+
+    access_token = _issue_access_for(identity, sess.sid)
+
+    # Successful login clears the lockout counter.
+    if ip:
+        await rt.lockout.clear(ip=ip, email="_oidc_")
+
+    # Redirect to next_url if we stashed one; else root.
+    response = RedirectResponse("/", status_code=302)
+    response.set_cookie(
+        rt.cookie_name,
+        access_token,
+        httponly=True,
+        secure=rt.cookie_secure,
+        samesite="lax",
+        max_age=rt.access_ttl_sec,
+        path="/",
+    )
+    return response
+
+
+@router.post("/refresh")
+async def refresh(request: Request, response: Response):
+    rt = get_runtime()
+    token = _read_current_access_token(request, rt.cookie_name)
+    if token is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no session")
+    try:
+        raw_claims = decode_claims_insecure(token)
+    except Exception:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token")
+    sid = raw_claims.get("sid")
+    if not sid:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token")
+
+    sess = await rt.session_store.get(sid)
+    if sess is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "session expired")
+
+    # Build a fresh access token with the same claims.
+    now = int(time.time())
+    claims = AccessTokenClaims(
+        sub=str(raw_claims["sub"]),
+        email=str(raw_claims.get("email", "")),
+        tid=raw_claims.get("tid"),
+        wids=list(raw_claims.get("wids", [])),
+        permissions=list(raw_claims.get("permissions", [])),
+        roles=dict(raw_claims.get("roles", {})),
+        sid=sid,
+        iat=now,
+        exp=now + rt.access_ttl_sec,
+        iss=rt.issuer,
+        aud=rt.audience,
+    )
+    new_token = issue_access_token(claims, private_key_pem=rt.jwt_private_key_pem)
+    response.set_cookie(
+        rt.cookie_name,
+        new_token,
+        httponly=True,
+        secure=rt.cookie_secure,
+        samesite="lax",
+        max_age=rt.access_ttl_sec,
+        path="/",
+    )
+    return {"access_token": new_token, "token_type": "Bearer", "expires_in": rt.access_ttl_sec}
+
+
+@router.post("/logout")
+async def logout(request: Request, response: Response):
+    rt = get_runtime()
+    token = _read_current_access_token(request, rt.cookie_name)
+    if token:
+        try:
+            raw = decode_claims_insecure(token)
+            sid = raw.get("sid")
+            if sid:
+                await rt.session_store.revoke(sid)
+        except Exception:
+            pass
+    response.delete_cookie(rt.cookie_name, path="/")
+    return {"status": "ok"}
+
+
+# --- helpers ---
+
+
+def _issue_access_for(identity, sid: str) -> str:
+    rt = get_runtime()
+    now = int(time.time())
+    claims = AccessTokenClaims(
+        sub=str(identity.user_id),
+        email=identity.email or "",
+        tid=identity.tenant_id,
+        wids=list(identity.workspace_ids),
+        permissions=sorted(identity.permissions),
+        roles=identity.roles,
+        sid=sid,
+        iat=now,
+        exp=now + rt.access_ttl_sec,
+        iss=rt.issuer,
+        aud=rt.audience,
+    )
+    return issue_access_token(claims, private_key_pem=rt.jwt_private_key_pem)
+
+
+def _read_current_access_token(request: Request, cookie_name: str) -> str | None:
+    cookie = request.cookies.get(cookie_name)
+    if cookie:
+        return cookie
+    auth = request.headers.get("Authorization", "")
+    parts = auth.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer" and not parts[1].startswith("dft_"):
+        return parts[1]
+    return None

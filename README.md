@@ -215,7 +215,11 @@ To enable:
    - `DEERFLOW_DATABASE_URL=postgresql+asyncpg://...`
    - `DEERFLOW_REDIS_URL=redis://...`
    - `DEERFLOW_BOOTSTRAP_ADMIN_EMAIL=you@example.com` (optional — creates the first platform admin)
-4. Start the gateway normally. Bootstrap runs idempotently at startup.
+4. **Configure OIDC providers** (M2): copy `config/identity.yaml.example` to `config/identity.yaml` and fill in at least one provider (Okta, Azure AD, Keycloak, …). `$VAR` references are resolved against the environment, so credentials stay in your env file.
+5. **Generate JWT keys** (M2): `cd backend && make identity-keys` writes a 2048-bit RS256 keypair to `$DEERFLOW_HOME/_system/jwt_{private,public}.pem` (0600/0644). The gateway will generate them on first start if absent, but running the target explicitly is safer for production.
+6. Start the gateway normally. Bootstrap runs idempotently at startup.
+
+Once enabled, users sign in at `/api/auth/oidc/{provider}/login`, receive an HttpOnly `deerflow_session` cookie, and can manage their session + API tokens under `/api/me/*`. M3 (route-level permission enforcement) is the next milestone — M2 wires identity onto every request but does not yet block legacy routes.
 
 Full roadmap and design: [`docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`](docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md).
 

@@ -29,3 +29,8 @@ identity-bootstrap:
 
 identity-test:
 	PYTHONPATH=. IDENTITY_TEST_BACKEND=on uv run pytest tests/identity/ -v
+
+# Generate (or reuse) the RS256 keypair used by M2 auth. Writes to
+# $DEERFLOW_HOME/_system/ by default; respects DEERFLOW_JWT_*_KEY_PATH.
+identity-keys:
+	PYTHONPATH=. uv run python -c "from app.gateway.identity.auth.jwt import ensure_rsa_keypair; from app.gateway.identity.settings import get_identity_settings; s = get_identity_settings(); priv, pub = ensure_rsa_keypair(s.jwt_private_key_path, s.jwt_public_key_path); print(f'private: {s.jwt_private_key_path}'); print(f'public:  {s.jwt_public_key_path}')"
