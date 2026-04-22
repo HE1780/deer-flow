@@ -31,23 +31,16 @@ def _deerflow_home() -> str:
 def _deer_flow_home() -> str:
     """Resolve the M4 ``DEER_FLOW_HOME`` for the storage layout.
 
-    Resolution matches ``app.gateway.identity.storage.paths.deerflow_home``:
-
-    1. ``$DEER_FLOW_HOME`` env var if set and non-empty.
-    2. Repo-local fallback ``{backend_dir}/.deer-flow`` (computed from this
-       module's own path, so it is independent of CWD).
-
-    This helper is intentionally duplicated with
-    ``app.gateway.identity.storage.paths`` (rather than imported) so that
-    ``storage.paths`` never needs to import ``settings`` — keeping the
-    path-construction layer free of circular dependencies.
+    Delegates to :func:`app.gateway.identity.storage.paths.deerflow_home`
+    so the two layers agree even when ``$DEER_FLOW_HOME`` points at a
+    symlink. The import direction is safe: ``storage.paths`` has no
+    dependency on ``settings`` (it is a stdlib-only path-construction
+    layer).
     """
 
-    env = os.environ.get("DEER_FLOW_HOME")
-    if env:
-        return os.path.abspath(os.path.expanduser(env))
-    backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    return os.path.join(backend_dir, ".deer-flow")
+    from app.gateway.identity.storage.paths import deerflow_home
+
+    return str(deerflow_home())
 
 
 @dataclass(frozen=True)

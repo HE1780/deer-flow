@@ -24,8 +24,8 @@ underscore) to stay aligned with the rest of the project
 legacy ``DEERFLOW_HOME`` variable exists in ``identity.settings`` for the M2
 JWT key-material paths; that variable is **not** consulted here.
 
-Layout (spec §7.1 / §7.2)
--------------------------
+Layout (spec §7.1 / §7.2 / §7.4 / §9.3 / §9.6 / §10.2)
+------------------------------------------------------
 
 Every path returned by this module is **absolute** and **not created** by
 these helpers — the caller is responsible for materialising directories when
@@ -33,21 +33,19 @@ appropriate::
 
     {home}/
       tenants/{tenant_id}/
-        custom/                                # skills_tenant_custom_root
-        shared/                                # tenant_shared_root
+        custom/                                       # skills_tenant_custom_root
+        shared/                                       # tenant_shared_root
+        users/{user_id}/memory.json                   # user_memory_path
         workspaces/{workspace_id}/
-          user/                                # skills_workspace_user_root
-          threads/{thread_id}/                 # thread_path
+          user/                                       # skills_workspace_user_root
+          threads/{thread_id}/                        # thread_path
       skills/
-        public/                                # skills_public_root (shared)
-      memory/
-        tenants/{tenant_id}/users/{user_id}/   # user_memory_path
-      audit/
-        fallback/{YYYYMMDD}.jsonl              # audit_fallback_path
-        archive/tenants/{tenant_id}/{YYYY-MM}/ # audit_archive_path
-      migrations/
-        reports/{ts}.json                      # migration_report_path
-        .lock                                  # migration_lock_path
+        public/                                       # skills_public_root (shared)
+      _system/                                        # migration temp / audit fallback / archive
+        audit_fallback/{YYYYMMDD}.jsonl               # audit_fallback_path
+        audit_archive/{tenant_id}/{YYYY-MM}.jsonl.gz  # audit_archive_path (FILE)
+        migration_report_{ts}.json                    # migration_report_path
+        migration.lock                                # migration_lock_path
 
 Design decisions
 ~~~~~~~~~~~~~~~~
@@ -166,15 +164,22 @@ def thread_path(tenant_id: int, workspace_id: int, thread_id: str) -> Path:
     """Return ``{home}/tenants/{tid}/workspaces/{wid}/threads/{thread_id}``.
 
     Per-thread storage (agent work dir, uploads, outputs live *under* this
-    directory in later tasks). ``thread_id`` is treated as an opaque string;
-    safe-character validation is the caller's responsibility — the harness
-    already owns that via ``deerflow.config.paths._validate_thread_id``.
+    directory in later tasks). ``thread_id`` is treated as an opaque string
+    here; Task 2's ``path_guard`` remains the primary defence. This helper
+    applies a minimal defensive check — rejecting ``thread_id`` that contains
+    path separators (``/`` or ``\\``), parent traversal (``..``) or a NUL
+    byte — for consistency with the rest of this module.
     """
 
     _require_positive("tenant_id", tenant_id)
     _require_positive("workspace_id", workspace_id)
     if not isinstance(thread_id, str) or not thread_id:
         raise ValueError(f"thread_id must be a non-empty str, got {thread_id!r}")
+    for bad in ("/", "\\", "..", "\0"):
+        if bad in thread_id:
+            raise ValueError(
+                f"thread_id must not contain {bad!r}, got {thread_id!r}"
+            )
     return workspace_root(tenant_id, workspace_id) / "threads" / thread_id
 
 
@@ -224,7 +229,7 @@ def skills_workspace_user_root(tenant_id: int, workspace_id: int) -> Path:
 
 
 def user_memory_path(tenant_id: int, user_id: int) -> Path:
-    """Return ``{home}/memory/tenants/{tid}/users/{uid}/memory.json``.
+    """Return ``{home}/tenants/{tid}/users/{uid}/memory.json`` (spec §7.4).
 
     The per-user memory file path. The caller is responsible for creating
     parent directories.
@@ -232,11 +237,11 @@ def user_memory_path(tenant_id: int, user_id: int) -> Path:
 
     _require_positive("tenant_id", tenant_id)
     _require_positive("user_id", user_id)
-    return deerflow_home() / "memory" / "tenants" / str(tenant_id) / "users" / str(user_id) / "memory.json"
+    return tenant_root(tenant_id) / "users" / str(user_id) / "memory.json"
 
 
 def audit_fallback_path(date_yyyymmdd: str) -> Path:
-    """Return ``{home}/audit/fallback/{YYYYMMDD}.jsonl``.
+    """Return ``{home}/_system/audit_fallback/{YYYYMMDD}.jsonl`` (spec §9.3).
 
     Fallback audit log used when the primary audit sink (Postgres) is
     unavailable. ``date_yyyymmdd`` must be exactly 8 ASCII digits.
@@ -244,14 +249,15 @@ def audit_fallback_path(date_yyyymmdd: str) -> Path:
 
     if not isinstance(date_yyyymmdd, str) or len(date_yyyymmdd) != 8 or not date_yyyymmdd.isdigit():
         raise ValueError(f"date_yyyymmdd must be 8 digits (YYYYMMDD), got {date_yyyymmdd!r}")
-    return deerflow_home() / "audit" / "fallback" / f"{date_yyyymmdd}.jsonl"
+    return deerflow_home() / "_system" / "audit_fallback" / f"{date_yyyymmdd}.jsonl"
 
 
 def audit_archive_path(tenant_id: int, yyyy_mm: str) -> Path:
-    """Return ``{home}/audit/archive/tenants/{tenant_id}/{YYYY-MM}``.
+    """Return ``{home}/_system/audit_archive/{tenant_id}/{YYYY-MM}.jsonl.gz`` (spec §9.6).
 
-    Directory used by the monthly archiver job. ``yyyy_mm`` must be
-    ``YYYY-MM`` (seven characters, digits + a hyphen at index 4).
+    **File** path written by the monthly archiver job (gzip-compressed JSON
+    Lines). ``yyyy_mm`` must be ``YYYY-MM`` (seven characters, digits + a
+    hyphen at index 4).
     """
 
     _require_positive("tenant_id", tenant_id)
@@ -263,11 +269,11 @@ def audit_archive_path(tenant_id: int, yyyy_mm: str) -> Path:
         or not yyyy_mm[5:].isdigit()
     ):
         raise ValueError(f"yyyy_mm must be 'YYYY-MM', got {yyyy_mm!r}")
-    return deerflow_home() / "audit" / "archive" / "tenants" / str(tenant_id) / yyyy_mm
+    return deerflow_home() / "_system" / "audit_archive" / str(tenant_id) / f"{yyyy_mm}.jsonl.gz"
 
 
 def migration_report_path(ts: str) -> Path:
-    """Return ``{home}/migrations/reports/{ts}.json``.
+    """Return ``{home}/_system/migration_report_{ts}.json`` (spec §10.2).
 
     ``ts`` is treated as an opaque, non-empty identifier (typically an
     ISO-8601-ish timestamp chosen by the migration runner).
@@ -275,13 +281,14 @@ def migration_report_path(ts: str) -> Path:
 
     if not isinstance(ts, str) or not ts:
         raise ValueError(f"ts must be a non-empty str, got {ts!r}")
-    return deerflow_home() / "migrations" / "reports" / f"{ts}.json"
+    return deerflow_home() / "_system" / f"migration_report_{ts}.json"
 
 
 def migration_lock_path() -> Path:
-    """Return ``{home}/migrations/.lock``.
+    """Return ``{home}/_system/migration.lock`` (spec §7.1 / §10.2).
 
-    Advisory lock file used to prevent concurrent migrations.
+    Advisory lock file used to prevent concurrent migrations. Kept under
+    ``_system/`` alongside the migration report files.
     """
 
-    return deerflow_home() / "migrations" / ".lock"
+    return deerflow_home() / "_system" / "migration.lock"

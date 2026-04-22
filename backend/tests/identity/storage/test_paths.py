@@ -7,7 +7,6 @@ to isolate the layout root.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -155,10 +154,10 @@ def test_skills_roots_are_distinct(tmp_path, monkeypatch):
 
 
 def test_user_memory_path_layout(tmp_path, monkeypatch):
+    """Spec §7.4: user memory lives under tenants/{tid}/users/{uid}/memory.json."""
     monkeypatch.setenv("DEER_FLOW_HOME", str(tmp_path))
     expected = (
         tmp_path.resolve()
-        / "memory"
         / "tenants"
         / "7"
         / "users"
@@ -174,9 +173,10 @@ def test_user_memory_path_layout(tmp_path, monkeypatch):
 
 
 def test_audit_fallback_path_layout(tmp_path, monkeypatch):
+    """Spec §9.3: fallback lives under _system/audit_fallback/{date}.jsonl."""
     monkeypatch.setenv("DEER_FLOW_HOME", str(tmp_path))
     assert audit_fallback_path("20260422") == (
-        tmp_path.resolve() / "audit" / "fallback" / "20260422.jsonl"
+        tmp_path.resolve() / "_system" / "audit_fallback" / "20260422.jsonl"
     )
 
 
@@ -187,10 +187,19 @@ def test_audit_fallback_path_rejects_malformed_date():
 
 
 def test_audit_archive_path_layout(tmp_path, monkeypatch):
+    """Spec §9.6: archive is a FILE at _system/audit_archive/{tid}/{yyyy-mm}.jsonl.gz."""
     monkeypatch.setenv("DEER_FLOW_HOME", str(tmp_path))
     assert audit_archive_path(7, "2026-04") == (
-        tmp_path.resolve() / "audit" / "archive" / "tenants" / "7" / "2026-04"
+        tmp_path.resolve() / "_system" / "audit_archive" / "7" / "2026-04.jsonl.gz"
     )
+
+
+def test_audit_archive_path_is_file_not_directory(tmp_path, monkeypatch):
+    """The archive path includes the .jsonl.gz suffix — it is a file, not a dir."""
+    monkeypatch.setenv("DEER_FLOW_HOME", str(tmp_path))
+    p = audit_archive_path(7, "2026-04")
+    assert p.suffix == ".gz"
+    assert p.name.endswith(".jsonl.gz")
 
 
 def test_audit_archive_path_rejects_malformed_month():
@@ -205,9 +214,10 @@ def test_audit_archive_path_rejects_malformed_month():
 
 
 def test_migration_report_path_layout(tmp_path, monkeypatch):
+    """Spec §10.2: reports live at _system/migration_report_{ts}.json."""
     monkeypatch.setenv("DEER_FLOW_HOME", str(tmp_path))
     assert migration_report_path("2026-04-22T12-00-00Z") == (
-        tmp_path.resolve() / "migrations" / "reports" / "2026-04-22T12-00-00Z.json"
+        tmp_path.resolve() / "_system" / "migration_report_2026-04-22T12-00-00Z.json"
     )
 
 
@@ -217,8 +227,9 @@ def test_migration_report_path_rejects_empty():
 
 
 def test_migration_lock_path_layout(tmp_path, monkeypatch):
+    """Spec §7.1 / §10.2: the lock file lives under _system/."""
     monkeypatch.setenv("DEER_FLOW_HOME", str(tmp_path))
-    assert migration_lock_path() == tmp_path.resolve() / "migrations" / ".lock"
+    assert migration_lock_path() == tmp_path.resolve() / "_system" / "migration.lock"
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +293,29 @@ def test_thread_id_must_be_non_empty_str(tmp_path, monkeypatch):
         thread_path(1, 1, 123)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "../escape",
+        "a/b",
+        "a\\b",
+        "..",
+        "foo/../bar",
+        "has\0nul",
+    ],
+)
+def test_thread_id_rejects_path_traversal_chars(bad_id, tmp_path, monkeypatch):
+    """Defence-in-depth: reject thread_id containing '/', '\\', '..', or NUL.
+
+    Task 2's ``path_guard`` remains the primary defence, but consistency
+    with the rest of this module (``_require_positive`` etc.) matters.
+    """
+
+    monkeypatch.setenv("DEER_FLOW_HOME", str(tmp_path))
+    with pytest.raises(ValueError):
+        thread_path(1, 1, bad_id)
+
+
 # ---------------------------------------------------------------------------
 # No side effects
 # ---------------------------------------------------------------------------
@@ -319,4 +353,3 @@ def test_helpers_do_not_create_directories(tmp_path, monkeypatch):
 def test_env_var_name_is_deer_flow_home_with_underscore():
     """Guard against a typo that would silently fall back to the default."""
     assert paths_mod._ENV_HOME == "DEER_FLOW_HOME"
-    assert "DEER_FLOW_HOME" in os.environ or "DEER_FLOW_HOME" not in os.environ
