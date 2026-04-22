@@ -28,6 +28,28 @@ def _deerflow_home() -> str:
     return os.environ.get("DEERFLOW_HOME") or os.path.join(os.path.expanduser("~"), ".deerflow")
 
 
+def _deer_flow_home() -> str:
+    """Resolve the M4 ``DEER_FLOW_HOME`` for the storage layout.
+
+    Resolution matches ``app.gateway.identity.storage.paths.deerflow_home``:
+
+    1. ``$DEER_FLOW_HOME`` env var if set and non-empty.
+    2. Repo-local fallback ``{backend_dir}/.deer-flow`` (computed from this
+       module's own path, so it is independent of CWD).
+
+    This helper is intentionally duplicated with
+    ``app.gateway.identity.storage.paths`` (rather than imported) so that
+    ``storage.paths`` never needs to import ``settings`` — keeping the
+    path-construction layer free of circular dependencies.
+    """
+
+    env = os.environ.get("DEER_FLOW_HOME")
+    if env:
+        return os.path.abspath(os.path.expanduser(env))
+    backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    return os.path.join(backend_dir, ".deer-flow")
+
+
 @dataclass(frozen=True)
 class IdentitySettings:
     """Process-level settings for the identity subsystem.
@@ -41,6 +63,9 @@ class IdentitySettings:
     redis_url: str
     bootstrap_admin_email: str | None
     auto_provision_tenant: bool
+    # M4 storage layout root (distinct from the legacy DEERFLOW_HOME used for JWT keys).
+    # Resolved at read time so test monkeypatching of DEER_FLOW_HOME works naturally.
+    deer_flow_home: str
     # M2 auth settings
     jwt_private_key: str | None
     jwt_private_key_path: str
@@ -71,6 +96,7 @@ def get_identity_settings() -> IdentitySettings:
         redis_url=os.environ.get("DEERFLOW_REDIS_URL", "redis://localhost:6379/0"),
         bootstrap_admin_email=os.environ.get("DEERFLOW_BOOTSTRAP_ADMIN_EMAIL") or None,
         auto_provision_tenant=_env_bool("IDENTITY_AUTO_PROVISION_TENANT", default=False),
+        deer_flow_home=_deer_flow_home(),
         jwt_private_key=os.environ.get("DEERFLOW_JWT_PRIVATE_KEY") or None,
         jwt_private_key_path=os.environ.get(
             "DEERFLOW_JWT_PRIVATE_KEY_PATH",
