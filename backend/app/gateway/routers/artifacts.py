@@ -175,9 +175,24 @@ async def get_artifact(thread_id: str, path: str, request: Request, download: bo
 
     def _resolve(virtual_path: str) -> Path:
         if tid is not None and wid is not None:
-            actual = resolve_thread_virtual_path(
-                thread_id, virtual_path, tenant_id=tid, workspace_id=wid
-            )
+            # Intercept the resolver's 403 (``"Access denied: path traversal
+            # detected"``) and rewrite the body to a generic ``"Access denied"``
+            # so the client can't probe for path-shape hints. 400s pass through
+            # unchanged — they describe bad input, not policy decisions.
+            try:
+                actual = resolve_thread_virtual_path(
+                    thread_id, virtual_path, tenant_id=tid, workspace_id=wid
+                )
+            except HTTPException as exc:
+                if exc.status_code == 403:
+                    logger.warning(
+                        "authz.path.denied thread=%s tenant=%s reason=%s",
+                        thread_id,
+                        tid,
+                        exc.detail,
+                    )
+                    raise HTTPException(status_code=403, detail="Access denied") from None
+                raise
             try:
                 assert_within_tenant_root(actual, tid)
             except PathEscapeError as exc:

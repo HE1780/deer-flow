@@ -171,9 +171,9 @@ def test_flag_on_cross_tenant_traversal_returns_403(isolated_home, flag_on):
     status = getattr(exc, "status_code", None)
     assert status == 403, f"expected 403, got {exc!r}"
     detail = getattr(exc, "detail", "") or ""
-    # Body must not leak cross-tenant ids / paths.
-    assert "99" not in str(detail)
-    assert "secret.txt" not in str(detail)
+    # Body must not leak cross-tenant ids / paths — lock in the exact
+    # generic message so future refactors can't weaken the contract.
+    assert str(detail) == "Access denied"
 
 
 def test_flag_on_path_traversal_returns_403(isolated_home, flag_on):
@@ -253,3 +253,10 @@ def test_extract_scope_uses_first_workspace_id(flag_on):
     good = FakeIdentity(tenant_id=5, workspace_ids=(7, 8, 9))
     req = _fake_request_with_identity(good)
     assert artifacts_router._extract_scope(req) == (5, 7)
+
+
+def test_extract_scope_tenant_without_workspace_falls_back(flag_on):
+    """Tenant id present but workspace_ids is empty → falls back to (None, None)."""
+    bad = FakeIdentity(tenant_id=5, workspace_ids=())
+    req = _fake_request_with_identity(bad)
+    assert artifacts_router._extract_scope(req) == (None, None)
