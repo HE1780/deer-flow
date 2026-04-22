@@ -73,6 +73,10 @@ def test_auth_routes_absent_when_flag_off(monkeypatch):
         paths = {getattr(r, "path", "") for r in app.routes}
         assert not any(p.startswith("/api/auth") for p in paths)
         assert "/api/me" not in paths
+        # M3: roles + admin-stub routes also gated behind the flag.
+        assert "/api/roles" not in paths
+        assert "/api/permissions" not in paths
+        assert not any(p.startswith("/api/admin/tenants") for p in paths)
     finally:
         get_identity_settings.cache_clear()
 
@@ -89,5 +93,9 @@ def test_auth_routes_registered_when_flag_on(monkeypatch):
         paths = {getattr(r, "path", "") for r in app.routes}
         assert any(p.startswith("/api/auth/oidc") for p in paths)
         assert "/api/me" in paths
+        # M3 routes
+        assert "/api/roles" in paths
+        assert "/api/permissions" in paths
+        assert "/api/admin/tenants" in paths
     finally:
         get_identity_settings.cache_clear()

@@ -297,19 +297,23 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 
 ### Identity Subsystem (`app/gateway/identity/`)
 
-**Status:** M1 (schema + bootstrap) and M2 (authentication) landed. Gated behind `ENABLE_IDENTITY` env var (default off).
+**Status:** M1 (schema + bootstrap), M2 (authentication), and M3 (RBAC + tenant-scope auto-filter) landed. Gated behind `ENABLE_IDENTITY` env var (default off).
 
 **Components**:
 - `settings.py` — reads `ENABLE_IDENTITY`, `DEERFLOW_DATABASE_URL`, `DEERFLOW_REDIS_URL`, `DEERFLOW_BOOTSTRAP_ADMIN_EMAIL`, plus M2 auth knobs (`DEERFLOW_JWT_*`, `DEERFLOW_ACCESS_TOKEN_TTL_SEC`, `DEERFLOW_REFRESH_TOKEN_TTL_SEC`, `DEERFLOW_COOKIE_*`, `DEERFLOW_LOGIN_LOCKOUT_*`, `DEERFLOW_BCRYPT_COST`, `DEERFLOW_INTERNAL_SIGNING_KEY`, `IDENTITY_AUTO_PROVISION_TENANT`)
-- `models/` — 11 ORM tables matching spec §4 (tenants, users, memberships, workspaces, permissions, roles, role_permissions, user_roles, workspace_members, api_tokens, audit_logs)
+- `models/` — 11 ORM tables matching spec §4 (tenants, users, memberships, workspaces, permissions, roles, role_permissions, user_roles, workspace_members, api_tokens, audit_logs). `TenantScoped` / `WorkspaceScoped` mixins (`models/base.py`) mark rows for auto-filter — new M4 tables subscribe by declaring the mixin.
 - `db.py` — async engine, session factory, `get_session()` dependency
-- `context.py` — `current_identity` / `current_tenant_id` / `current_session_id` ContextVars (M2 set by IdentityMiddleware; M3+ reads)
+- `context.py` — `current_identity` / `current_tenant_id` / `current_session_id` ContextVars, plus M3's `with_platform_privilege()` context manager that temporarily bypasses the tenant auto-filter (for maintenance scripts, admin jobs).
 - `bootstrap.py` — idempotent seed (roles, permissions, default tenant/workspace, first admin)
 - `cli.py` — `python -m app.gateway.identity.cli bootstrap`
-- **M2** `auth/` — `Identity` dataclass; `jwt.py` (RS256 issue/verify, refresh token generator, `ensure_rsa_keypair`); `session.py` (Redis SessionStore); `lockout.py` (LoginLockout); `api_token.py` (create/verify/revoke `dft_*` tokens, bcrypt at rest); `oidc.py` (login redirect + callback, PKCE + state + nonce in Redis); `config.py` (OIDC provider loader from `config/identity.yaml`); `identity_factory.py` (first-login upsert + tenant resolution + Identity flattening); `dependencies.py` (`require_authenticated`, `get_current_identity` FastAPI deps); `runtime.py` (shared AuthRuntime handle populated at lifespan)
-- **M2** `middlewares/identity.py` — `IdentityMiddleware`: reads `Authorization` header or session cookie, resolves to `Identity` (anonymous on failure), sets `request.state.identity` + ContextVars
+- **M2** `auth/` — `Identity` dataclass (M3 adds `has_permission`/`in_tenant`/`in_workspace`/`is_platform_admin` helpers + `ip` field); `jwt.py` (RS256 issue/verify, refresh token generator, `ensure_rsa_keypair`); `session.py` (Redis SessionStore); `lockout.py` (LoginLockout); `api_token.py` (create/verify/revoke `dft_*` tokens, bcrypt at rest); `oidc.py` (login redirect + callback, PKCE + state + nonce in Redis); `config.py` (OIDC provider loader from `config/identity.yaml`); `identity_factory.py` (first-login upsert + tenant resolution + Identity flattening); `dependencies.py` (`require_authenticated`, `get_current_identity` FastAPI deps); `runtime.py` (shared AuthRuntime handle populated at lifespan)
+- **M2** `middlewares/identity.py` — `IdentityMiddleware`: reads `Authorization` header or session cookie, resolves to `Identity` (anonymous on failure), sets `request.state.identity` + ContextVars; M3 also populates `identity.ip` from the client host for audit events.
 - **M2** `routers/auth.py` (`/api/auth/oidc/{provider}/login`, `/api/auth/oidc/{provider}/callback`, `/api/auth/refresh`, `/api/auth/logout`)
 - **M2** `routers/me.py` (`/api/me`, `/api/me/switch-tenant`, `/api/me/tokens`, `/api/me/sessions`, `PATCH /api/me`)
+- **M3** `rbac/` — `decorator.py` exports `requires(tag, scope)` (FastAPI dependency factory); `errors.py` (`PermissionDeniedError`); `permission_cache.py` (Redis-backed `PermissionCache` for API-token callers, 300s TTL — JWT callers don't need it because permissions are in the claims).
+- **M3** `middlewares/tenant_scope.py` — `install_auto_filter(session_maker)` registers SQLAlchemy `do_orm_execute` and `before_flush` listeners. SELECTs are auto-filtered by `identity.tenant_id` (and `workspace_id IN (...)` when the mixin applies); cross-tenant / cross-workspace INSERTs raise `PermissionDeniedError`. Platform admins bypass both. `with_platform_privilege()` extends that bypass to any identity for maintenance paths.
+- **M3** `routers/roles.py` (`GET /api/roles`, `GET /api/permissions`) — read-only, require only `require_authenticated`. Admin UI and frontend guards consume these.
+- **M3** `routers/admin_stub.py` — placeholder routes (`/api/tenants/{tid}/workspaces/{wid}/threads`, `/api/tenants/{tid}/workspaces/{wid}/skills/{skid}`, `/api/tenants/{tid}/workspaces`, `/api/admin/tenants`) that exist to exercise `@requires` in tests. M4 and M7 replace them with real handlers — **do not rely on these shapes in production callers.**
 
 **Schema + ops:**
 ```bash
@@ -332,9 +336,26 @@ make identity-test        # run identity test suite (needs postgres+redis)
 
 **Note on `user_roles` table:** `tenant_id` is nullable (NULL = platform-scoped grant, e.g. `platform_admin`). Since Postgres PK columns must be NOT NULL, `user_roles` uses a surrogate `id` primary key plus `UNIQUE(user_id, tenant_id, role_id)` and a partial unique index to enforce at-most-one platform grant per (user, role).
 
-**Note on M2 vs M3:** M2 never returns 401 from the middleware — unknown/expired/revoked credentials all resolve to `Identity.anonymous()`. M3 will add a per-route decorator (`@requires("thread:read")` etc.) that maps anonymous access to 401 and insufficient permissions to 403. Business routes added now should call `Depends(require_authenticated)` where they need an authenticated user; `require_authenticated` raises 401 on its own.
+**Note on M2 vs M3 enforcement:** M2 never returns 401 from `IdentityMiddleware` — unknown/expired/revoked credentials all resolve to `Identity.anonymous()`. M3's `@requires(tag, scope)` dependency maps anonymous callers to 401 (`UNAUTHENTICATED`) and missing permissions to 403 (`PERMISSION_DENIED`, with `missing` field for UI). When you only need authentication (no permission tag), use `Depends(require_authenticated)` — it raises 401 on its own.
 
-**Roadmap:** M3 adds RBAC middleware, M4 adds storage isolation, M5 adds LangGraph integration, M6 adds audit writer, M7 adds admin UI + migration script. See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
+**Using `@requires` on new routes:**
+
+```python
+from fastapi import Depends
+from app.gateway.identity.rbac.decorator import requires
+
+@router.post(
+    "/api/tenants/{tid}/workspaces/{wid}/threads",
+    dependencies=[Depends(requires("thread:write", "workspace"))],
+)
+async def create_thread(tid: int, wid: int): ...
+```
+
+Scopes: `"platform"` (permission check only), `"tenant"` (also verifies caller is in `{tid}`/`{tenant_id}`), `"workspace"` (also verifies caller is in `{wid}`/`{workspace_id}`/`{ws_id}`). A `scope="tenant"` route with no tenant path param falls through to the permission check — this is how cross-tenant list endpoints like `/api/admin/tenants` are expressed.
+
+**SQLAlchemy auto-filter:** When `ENABLE_IDENTITY=true`, `install_auto_filter(sessionmaker)` attaches `do_orm_execute` and `before_flush` listeners to the global Session class. Any mapped class that inherits `TenantScoped` or `WorkspaceScoped` gets an automatic `WHERE tenant_id = ?` / `workspace_id IN (...)` clause injected into every SELECT. Platform admins bypass; regular users cannot escape their tenant even via a JOIN. Insert guard rejects cross-tenant / cross-workspace writes with `PermissionDeniedError`. Use `with_platform_privilege()` (from `app.gateway.identity.context`) to opt out of the filter for migration scripts or admin jobs — it's logged at INFO so privileged access leaves a trail.
+
+**Roadmap:** M4 adds storage isolation, M5 adds LangGraph integration, M6 adds audit writer + cache invalidation producers, M7 adds admin UI + migration script. See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
 
 ### Model Factory (`packages/harness/deerflow/models/factory.py`)
 

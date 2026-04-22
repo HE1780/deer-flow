@@ -16,8 +16,11 @@ from app.gateway.identity.auth.session import SessionStore
 from app.gateway.identity.bootstrap import bootstrap as identity_bootstrap
 from app.gateway.identity.db import clear_global_engine, create_engine_and_sessionmaker, set_global_engine
 from app.gateway.identity.middlewares.identity import IdentityMiddleware
+from app.gateway.identity.middlewares.tenant_scope import install_auto_filter
+from app.gateway.identity.routers import admin_stub as identity_admin_stub_router
 from app.gateway.identity.routers import auth as identity_auth_router
 from app.gateway.identity.routers import me as identity_me_router
+from app.gateway.identity.routers import roles as identity_roles_router
 from app.gateway.identity.settings import get_identity_settings
 from app.gateway.routers import (
     agents,
@@ -91,6 +94,10 @@ async def _init_identity_subsystem() -> None:
 
     # M2: build the AuthRuntime (JWT keys, session store, OIDC clients, lockout).
     await _init_auth_runtime(settings, maker)
+
+    # M3: install the SQLAlchemy tenant/workspace auto-filter so queries
+    # outside platform-admin context are scoped to the caller's tenant.
+    install_auto_filter(maker)
 
 
 async def _init_auth_runtime(settings, session_maker) -> None:
@@ -336,6 +343,8 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
     if get_identity_settings().enabled:
         app.include_router(identity_auth_router.router)
         app.include_router(identity_me_router.router)
+        app.include_router(identity_roles_router.router)
+        app.include_router(identity_admin_stub_router.router)
         app.add_middleware(_LazyIdentityMiddleware)
 
     @app.get("/health", tags=["health"])
