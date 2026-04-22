@@ -7,6 +7,10 @@ from fastapi import FastAPI
 from app.gateway.config import get_gateway_config
 from app.gateway.deps import langgraph_runtime
 from app.gateway.identity import db as _identity_db
+from app.gateway.identity.audit import api as identity_audit_router
+from app.gateway.identity.audit.fallback import FallbackLog
+from app.gateway.identity.audit.middleware import AuditMiddleware
+from app.gateway.identity.audit.writer import AuditBatchWriter
 from app.gateway.identity.auth.config import load_oidc_providers
 from app.gateway.identity.auth.jwt import ensure_rsa_keypair
 from app.gateway.identity.auth.lockout import LoginLockout
@@ -80,6 +84,34 @@ class _LazyIdentityMiddleware:
         return await self._wrapped(scope, receive, send)
 
 
+class _LazyAuditMiddleware:
+    """Defer construction of AuditMiddleware until the audit writer exists.
+
+    Registered as the outermost HTTP middleware so it wraps the identity
+    middleware — the request's timer starts before identity resolves, and
+    the event is built after ``request.state.identity`` has been set by
+    the inner layer.
+    """
+
+    def __init__(self, app):
+        self._app = app
+        self._wrapped = None
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "lifespan":
+            return await self._app(scope, receive, send)
+        if self._wrapped is None:
+            # The FastAPI app instance exposes state; grab writer from there.
+            # scope["app"] is the real FastAPI instance thanks to Starlette.
+            app = scope.get("app")
+            writer = getattr(app.state, "audit_writer", None) if app is not None else None
+            if writer is None:
+                # Audit not initialised — fall through unmodified.
+                return await self._app(scope, receive, send)
+            self._wrapped = AuditMiddleware(self._app, writer=writer)
+        return await self._wrapped(scope, receive, send)
+
+
 async def _init_identity_subsystem() -> None:
     settings = get_identity_settings()
     if not settings.enabled:
@@ -150,6 +182,36 @@ async def _init_auth_runtime(settings, session_maker) -> None:
     logger.info("identity auth runtime ready (providers: %s)", sorted(providers))
 
 
+async def _init_audit_subsystem(app: FastAPI) -> None:
+    """Start the audit batch writer and store it on ``app.state``.
+
+    Called after identity is initialised so we can reuse its sessionmaker.
+    No-op when ``ENABLE_IDENTITY=false`` — the caller gates on that.
+    """
+
+    settings = get_identity_settings()
+    if _identity_db._sessionmaker is None:
+        logger.warning("audit subsystem skipped: identity sessionmaker missing")
+        return
+
+    fallback = FallbackLog(settings.deer_flow_home)
+    writer = AuditBatchWriter(_identity_db._sessionmaker, fallback=fallback)
+    await writer.start()
+    app.state.audit_writer = writer
+    logger.info("audit batch writer started")
+
+
+async def _shutdown_audit_subsystem(app: FastAPI) -> None:
+    writer = getattr(app.state, "audit_writer", None)
+    if writer is None:
+        return
+    try:
+        await writer.stop()
+    finally:
+        app.state.audit_writer = None
+    logger.info("audit batch writer stopped")
+
+
 async def _shutdown_identity_subsystem() -> None:
     settings = get_identity_settings()
     if not settings.enabled:
@@ -178,6 +240,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize identity subsystem (no-op when ENABLE_IDENTITY=false)
     await _init_identity_subsystem()
 
+    # Start audit batch writer if identity is enabled.
+    if get_identity_settings().enabled:
+        await _init_audit_subsystem(app)
+
     # Initialize LangGraph runtime components (StreamBridge, RunManager, checkpointer, store)
     async with langgraph_runtime(app):
         logger.info("LangGraph runtime initialised")
@@ -202,6 +268,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             except Exception:
                 logger.exception("Failed to stop channel service")
 
+            await _shutdown_audit_subsystem(app)
             await _shutdown_identity_subsystem()
 
     logger.info("Shutting down API Gateway")
@@ -347,7 +414,13 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
         app.include_router(identity_roles_router.router)
         app.include_router(identity_admin_stub_router.router)
         app.include_router(identity_internal_router.router)
+        # M6 audit query + export
+        app.include_router(identity_audit_router.router)
+        # IdentityMiddleware first → executes innermost (sets state.identity).
+        # AuditMiddleware after → executes outermost (sees the resolved
+        # identity on the way out + records request duration end-to-end).
         app.add_middleware(_LazyIdentityMiddleware)
+        app.add_middleware(_LazyAuditMiddleware)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict:

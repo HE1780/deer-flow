@@ -42,3 +42,24 @@ def test_models_endpoint_still_responds(client_flag_off):
     assert r.status_code in (200, 404, 500)
     body = r.text.lower()
     assert "identity" not in body, f"Identity leak into legacy endpoint: {body[:200]}"
+
+
+def test_audit_routes_404_when_flag_off(client_flag_off):
+    """M6 invariant: with ENABLE_IDENTITY=false the audit API must not exist.
+
+    No router is mounted, no audit writer is started, no PG connection
+    is attempted — the routes simply return 404.
+    """
+    for path in (
+        "/api/tenants/1/audit",
+        "/api/tenants/1/audit/export",
+        "/api/admin/audit",
+    ):
+        r = client_flag_off.get(path)
+        assert r.status_code == 404, f"{path}: expected 404, got {r.status_code}"
+
+
+def test_audit_writer_not_started_when_flag_off(client_flag_off):
+    from app.gateway.app import app
+
+    assert getattr(app.state, "audit_writer", None) is None
