@@ -19,6 +19,7 @@ from app.gateway.identity.middlewares.identity import IdentityMiddleware
 from app.gateway.identity.middlewares.tenant_scope import install_auto_filter
 from app.gateway.identity.routers import admin_stub as identity_admin_stub_router
 from app.gateway.identity.routers import auth as identity_auth_router
+from app.gateway.identity.routers import internal as identity_internal_router
 from app.gateway.identity.routers import me as identity_me_router
 from app.gateway.identity.routers import roles as identity_roles_router
 from app.gateway.identity.settings import get_identity_settings
@@ -345,6 +346,7 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
         app.include_router(identity_me_router.router)
         app.include_router(identity_roles_router.router)
         app.include_router(identity_admin_stub_router.router)
+        app.include_router(identity_internal_router.router)
         app.add_middleware(_LazyIdentityMiddleware)
 
     @app.get("/health", tags=["health"])
