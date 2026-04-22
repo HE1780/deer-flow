@@ -8,6 +8,12 @@ nothing here should import the identity settings object or DB machinery, to
 keep the layer usable from early-startup code and from the harness bridge.
 """
 
+from app.gateway.identity.storage.config_layers import (
+    SENSITIVE_GLOBAL_ONLY,
+    SensitiveFieldViolation,
+    load_layered_config,
+    merge_config,
+)
 from app.gateway.identity.storage.path_guard import (
     PathEscapeError,
     assert_symlink_parent_safe,
@@ -32,11 +38,15 @@ from app.gateway.identity.storage.paths import (
 
 __all__ = [
     "PathEscapeError",
+    "SENSITIVE_GLOBAL_ONLY",
+    "SensitiveFieldViolation",
     "assert_symlink_parent_safe",
     "assert_within_tenant_root",
     "audit_archive_path",
     "audit_fallback_path",
     "deerflow_home",
+    "load_layered_config",
+    "merge_config",
     "migration_lock_path",
     "migration_report_path",
     "safe_join",

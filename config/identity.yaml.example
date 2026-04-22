@@ -37,3 +37,29 @@ oidc:
     #   authorize_url: https://idp.example.com/oauth2/authorize
     #   token_url: https://idp.example.com/oauth2/token
     #   jwks_uri: https://idp.example.com/.well-known/jwks.json
+
+# ---------------------------------------------------------------------------
+# sensitive_global_only (M4 §7.3) — informational reference only
+# ---------------------------------------------------------------------------
+#
+# The following dotted paths may only be set in this GLOBAL config file;
+# tenant-level (`{DEER_FLOW_HOME}/tenants/{tid}/config.yaml`) and
+# workspace-level (`.../workspaces/{wid}/config.yaml`) overlays that
+# attempt to set them will be rejected with `SensitiveFieldViolation`.
+#
+# The **authoritative** list lives in code at
+# `backend/app/gateway/identity/storage/config_layers.py` —
+# `SENSITIVE_GLOBAL_ONLY`. This block is kept in sync manually for
+# discoverability; do not rely on it at runtime.
+#
+# DSL:
+#   a.b.c      -- literal dotted path
+#   a[*].b     -- list at `a`, field `b` on every element
+#
+# sensitive_global_only:
+#   - models[*].api_key
+#   - models[*].endpoint
+#   - models[*].base_url
+#   - sandbox.provisioner.api_key
+#   - sandbox.provisioner.endpoint
+#   - memory.storage_path
