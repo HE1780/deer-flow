@@ -219,7 +219,7 @@ To enable:
 5. **Generate JWT keys** (M2): `cd backend && make identity-keys` writes a 2048-bit RS256 keypair to `$DEERFLOW_HOME/_system/jwt_{private,public}.pem` (0600/0644). The gateway will generate them on first start if absent, but running the target explicitly is safer for production.
 6. Start the gateway normally. Bootstrap runs idempotently at startup.
 
-Once enabled, users sign in at `/api/auth/oidc/{provider}/login`, receive an HttpOnly `deerflow_session` cookie, and can manage their session + API tokens under `/api/me/*`. M3 (route-level permission enforcement) is the next milestone — M2 wires identity onto every request but does not yet block legacy routes.
+Once enabled, users sign in at `/api/auth/oidc/{provider}/login`, receive an HttpOnly `deerflow_session` cookie, and can manage their session + API tokens under `/api/me/*`. M3 adds route-level RBAC (the `@requires(tag, scope)` dependency), a SQLAlchemy auto-filter that scopes every query to the caller's tenant/workspace, and the read-only `/api/roles` + `/api/permissions` endpoints used by UI guards. M4 (storage isolation) is the next milestone.
 
 Full roadmap and design: [`docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`](docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md).
 
