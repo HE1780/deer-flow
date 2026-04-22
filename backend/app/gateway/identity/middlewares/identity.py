@@ -20,6 +20,7 @@ context leakage doesn't cross requests.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -63,6 +64,9 @@ class IdentityMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         identity = await self._resolve(request)
+        client_ip = request.client.host if request.client else None
+        if client_ip is not None and identity.is_authenticated and identity.ip is None:
+            identity = replace(identity, ip=client_ip)
         request.state.identity = identity
 
         t_ident = current_identity.set(identity)
