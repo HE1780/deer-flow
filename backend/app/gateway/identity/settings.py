@@ -28,6 +28,21 @@ def _deerflow_home() -> str:
     return os.environ.get("DEERFLOW_HOME") or os.path.join(os.path.expanduser("~"), ".deerflow")
 
 
+def _deer_flow_home() -> str:
+    """Resolve the M4 ``DEER_FLOW_HOME`` for the storage layout.
+
+    Delegates to :func:`app.gateway.identity.storage.paths.deerflow_home`
+    so the two layers agree even when ``$DEER_FLOW_HOME`` points at a
+    symlink. The import direction is safe: ``storage.paths`` has no
+    dependency on ``settings`` (it is a stdlib-only path-construction
+    layer).
+    """
+
+    from app.gateway.identity.storage.paths import deerflow_home
+
+    return str(deerflow_home())
+
+
 @dataclass(frozen=True)
 class IdentitySettings:
     """Process-level settings for the identity subsystem.
@@ -41,6 +56,9 @@ class IdentitySettings:
     redis_url: str
     bootstrap_admin_email: str | None
     auto_provision_tenant: bool
+    # M4 storage layout root (distinct from the legacy DEERFLOW_HOME used for JWT keys).
+    # Resolved at read time so test monkeypatching of DEER_FLOW_HOME works naturally.
+    deer_flow_home: str
     # M2 auth settings
     jwt_private_key: str | None
     jwt_private_key_path: str
@@ -56,6 +74,9 @@ class IdentitySettings:
     login_lockout_block_sec: int
     bcrypt_cost: int
     internal_signing_key: str | None
+    # M5: allowed clock skew (seconds) for HMAC identity propagation between
+    # Gateway and LangGraph. Default 300s matches spec §5.4.
+    hmac_skew_sec: int
 
 
 @lru_cache(maxsize=1)
@@ -71,6 +92,7 @@ def get_identity_settings() -> IdentitySettings:
         redis_url=os.environ.get("DEERFLOW_REDIS_URL", "redis://localhost:6379/0"),
         bootstrap_admin_email=os.environ.get("DEERFLOW_BOOTSTRAP_ADMIN_EMAIL") or None,
         auto_provision_tenant=_env_bool("IDENTITY_AUTO_PROVISION_TENANT", default=False),
+        deer_flow_home=_deer_flow_home(),
         jwt_private_key=os.environ.get("DEERFLOW_JWT_PRIVATE_KEY") or None,
         jwt_private_key_path=os.environ.get(
             "DEERFLOW_JWT_PRIVATE_KEY_PATH",
@@ -91,4 +113,5 @@ def get_identity_settings() -> IdentitySettings:
         login_lockout_block_sec=_env_int("DEERFLOW_LOGIN_LOCKOUT_BLOCK_SEC", 900),
         bcrypt_cost=_env_int("DEERFLOW_BCRYPT_COST", 12),
         internal_signing_key=os.environ.get("DEERFLOW_INTERNAL_SIGNING_KEY") or None,
+        hmac_skew_sec=_env_int("DEERFLOW_HMAC_SKEW_SEC", 300),
     )

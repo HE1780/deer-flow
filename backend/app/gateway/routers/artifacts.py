@@ -7,11 +7,68 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 
+from app.gateway.identity.settings import get_identity_settings
+from app.gateway.identity.storage.path_guard import PathEscapeError, assert_within_tenant_root
 from app.gateway.path_utils import resolve_thread_virtual_path
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["artifacts"])
+
+
+def _extract_scope(request: Request | None) -> tuple[int | None, int | None]:
+    """Return ``(tenant_id, workspace_id)`` from ``request.state.identity``.
+
+    Only positive ints are accepted from both attribute and mapping shapes; any
+    other value (missing ``request``, flag off, anonymous identity, invalid
+    id types) falls back to ``(None, None)`` so the caller resolves through
+    the legacy path. The real production ``Identity`` dataclass exposes
+    ``tenant_id`` and ``workspace_ids`` (tuple); tests may inject a simple
+    namespace or dict that exposes ``workspace_id`` (singular) — both shapes
+    are supported here.
+    """
+    if request is None:
+        return None, None
+    if not get_identity_settings().enabled:
+        return None, None
+
+    identity = getattr(request.state, "identity", None)
+    if identity is None:
+        return None, None
+    # Respect the authenticated flag when present (production Identity).
+    if getattr(identity, "is_authenticated", True) is False:
+        return None, None
+
+    def _read(attr: str) -> object:
+        value = getattr(identity, attr, None)
+        if value is None and hasattr(identity, "get"):
+            try:
+                value = identity.get(attr)  # type: ignore[attr-defined]
+            except Exception:
+                value = None
+        return value
+
+    tid_raw = _read("tenant_id")
+    wid_raw = _read("workspace_id")
+    if wid_raw is None:
+        wids = _read("workspace_ids") or ()
+        if isinstance(wids, (list, tuple)) and wids:
+            wid_raw = wids[0]
+
+    def _coerce(value: object) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            return None
+        return value
+
+    tid = _coerce(tid_raw)
+    wid = _coerce(wid_raw)
+    # All-or-nothing: if either id is missing/invalid, fall back to legacy.
+    # Keeps downstream callers from accidentally mixing a real tenant id with
+    # an unresolved workspace slot.
+    if tid is None or wid is None:
+        return None, None
+    return tid, wid
+
 
 ACTIVE_CONTENT_MIME_TYPES = {
     "text/html",
@@ -114,6 +171,41 @@ async def get_artifact(thread_id: str, path: str, request: Request, download: bo
         - Download file: `/api/threads/abc123/artifacts/mnt/user-data/outputs/data.csv?download=true`
         - Active web content such as `.html`, `.xhtml`, and `.svg` artifacts is always downloaded
     """
+    tid, wid = _extract_scope(request)
+
+    def _resolve(virtual_path: str) -> Path:
+        if tid is not None and wid is not None:
+            # Intercept the resolver's 403 (``"Access denied: path traversal
+            # detected"``) and rewrite the body to a generic ``"Access denied"``
+            # so the client can't probe for path-shape hints. 400s pass through
+            # unchanged — they describe bad input, not policy decisions.
+            try:
+                actual = resolve_thread_virtual_path(
+                    thread_id, virtual_path, tenant_id=tid, workspace_id=wid
+                )
+            except HTTPException as exc:
+                if exc.status_code == 403:
+                    logger.warning(
+                        "authz.path.denied thread=%s tenant=%s reason=%s",
+                        thread_id,
+                        tid,
+                        exc.detail,
+                    )
+                    raise HTTPException(status_code=403, detail="Access denied") from None
+                raise
+            try:
+                assert_within_tenant_root(actual, tid)
+            except PathEscapeError as exc:
+                logger.warning(
+                    "authz.path.denied thread=%s tenant=%s reason=%s",
+                    thread_id,
+                    tid,
+                    exc,
+                )
+                raise HTTPException(status_code=403, detail="Access denied") from None
+            return actual
+        return resolve_thread_virtual_path(thread_id, virtual_path)
+
     # Check if this is a request for a file inside a .skill archive (e.g., xxx.skill/SKILL.md)
     if ".skill/" in path:
         # Split the path at ".skill/" to get the ZIP file path and internal path
@@ -122,7 +214,7 @@ async def get_artifact(thread_id: str, path: str, request: Request, download: bo
         skill_file_path = path[: marker_pos + len(".skill")]  # e.g., "mnt/user-data/outputs/my-skill.skill"
         internal_path = path[marker_pos + len(skill_marker) :]  # e.g., "SKILL.md"
 
-        actual_skill_path = resolve_thread_virtual_path(thread_id, skill_file_path)
+        actual_skill_path = _resolve(skill_file_path)
 
         if not actual_skill_path.exists():
             raise HTTPException(status_code=404, detail=f"Skill file not found: {skill_file_path}")
@@ -152,7 +244,7 @@ async def get_artifact(thread_id: str, path: str, request: Request, download: bo
         except UnicodeDecodeError:
             return Response(content=content, media_type=mime_type or "application/octet-stream", headers=cache_headers)
 
-    actual_path = resolve_thread_virtual_path(thread_id, path)
+    actual_path = _resolve(path)
 
     logger.info(f"Resolving artifact path: thread_id={thread_id}, requested_path={path}, actual_path={actual_path}")
 

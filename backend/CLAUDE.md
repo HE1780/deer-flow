@@ -158,12 +158,14 @@ from deerflow.config import get_app_config
 
 Lead-agent middlewares are assembled in strict append order across `packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py` (`build_lead_runtime_middlewares`) and `packages/harness/deerflow/agents/lead_agent/agent.py` (`_build_middlewares`):
 
+0. **IdentityMiddleware** *(M5, only when `DEERFLOW_INTERNAL_SIGNING_KEY` is set)* — Verifies HMAC-signed `X-Deerflow-*` headers injected by the Gateway, writes a `VerifiedIdentity` into `state["identity"]`. Pre-populated state (subagent inheritance) is never overwritten. Tampered/stale signatures raise.
 1. **ThreadDataMiddleware** - Creates per-thread directories (`backend/.deer-flow/threads/{thread_id}/user-data/{workspace,uploads,outputs}`); Web UI thread deletion now follows LangGraph thread removal with Gateway cleanup of the local `.deer-flow/threads/{thread_id}` directory
 2. **UploadsMiddleware** - Tracks and injects newly uploaded files into conversation
 3. **SandboxMiddleware** - Acquires sandbox, stores `sandbox_id` in state
 4. **DanglingToolCallMiddleware** - Injects placeholder ToolMessages for AIMessage tool_calls that lack responses (e.g., due to user interruption), including raw provider tool-call payloads preserved only in `additional_kwargs["tool_calls"]`
 5. **LLMErrorHandlingMiddleware** - Normalizes provider/model invocation failures into recoverable assistant-facing errors before later middleware/tool stages run
-6. **GuardrailMiddleware** - Pre-tool-call authorization via pluggable `GuardrailProvider` protocol (optional, if `guardrails.enabled` in config). Evaluates each tool call and returns error ToolMessage on deny. Three provider options: built-in `AllowlistProvider` (zero deps), OAP policy providers (e.g. `aport-agent-guardrails`), or custom providers. See [docs/GUARDRAILS.md](docs/GUARDRAILS.md) for setup, usage, and how to implement a provider.
+6. **IdentityGuardrailMiddleware** *(M5, only when `DEERFLOW_INTERNAL_SIGNING_KEY` is set)* — Identity-driven tool authorization. Reads `state["identity"].permissions`, matches against the built-in `TOOL_PERMISSION_MAP` (spec §6.4). Unknown tools default-deny (whitelist). MCP tools honor a declared `required_permission` attribute or fall back to `DEFAULT_MCP_PERMISSION = "skill:invoke"`. Runs before the optional OAP `GuardrailMiddleware` so both gates compose.
+7. **GuardrailMiddleware** - Pre-tool-call authorization via pluggable `GuardrailProvider` protocol (optional, if `guardrails.enabled` in config). Evaluates each tool call and returns error ToolMessage on deny. Three provider options: built-in `AllowlistProvider` (zero deps), OAP policy providers (e.g. `aport-agent-guardrails`), or custom providers. See [docs/GUARDRAILS.md](docs/GUARDRAILS.md) for setup, usage, and how to implement a provider.
 7. **SandboxAuditMiddleware** - Audits sandboxed shell/file operations for security logging before tool execution continues
 8. **ToolErrorHandlingMiddleware** - Converts tool exceptions into error `ToolMessage`s so the run can continue instead of aborting
 9. **SummarizationMiddleware** - Context reduction when approaching token limits (optional, if enabled)
@@ -239,6 +241,8 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 - Translation: `replace_virtual_path()` / `replace_virtual_paths_in_command()`
 - Detection: `is_local_sandbox()` checks `sandbox_id == "local"`
 
+**Tenant-aware bind mounts (M4, `ENABLE_IDENTITY=true`)**: When `SandboxMiddleware` observes a valid `(tenant_id, workspace_id)` pair on `state["identity"]`, `SandboxProvider.acquire(thread_id, *, tenant_id, workspace_id)` resolves stratified host-side sources under `$DEER_FLOW_HOME/tenants/{tid}/workspaces/{wid}/threads/{thread_id}/user-data/...` and `/.../acp-workspace/`. The container-side destinations remain unchanged (`/mnt/user-data/{workspace,uploads,outputs}`, `/mnt/acp-workspace`), so agent prompts and tool contracts are stable. Cross-tenant path escapes are rejected at two layers: `Paths.resolve_virtual_path(..., tenant_id=..., workspace_id=...)` (raises `PathEscapeError`) and the per-scan root-boundary check inside sandbox bind-mount assembly. Legacy single-tenant behavior is preserved when either id is absent (both `LocalSandboxProvider` and `AioSandboxProvider`).
+
 **Sandbox Tools** (in `packages/harness/deerflow/sandbox/tools.py`):
 - `bash` - Execute commands with path translation and error handling
 - `ls` - Directory listing (tree format, max 2 levels)
@@ -295,12 +299,20 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 - **Injection**: Enabled skills listed in agent system prompt with container paths
 - **Installation**: `POST /api/skills/install` extracts .skill ZIP archive to custom/ directory
 
+**Tenant-aware loading (M4, `ENABLE_IDENTITY=true`)**: When `load_skills(..., *, tenant_id=..., workspace_id=...)` is called with a resolved tenant/workspace pair, the loader scans three roots in order under `$DEER_FLOW_HOME`:
+
+1. `skills/public/` — cross-tenant, shared skills (same physical dir used in legacy mode)
+2. `tenants/{tid}/custom/` — tenant-scoped skills
+3. `tenants/{tid}/workspaces/{wid}/user/` — workspace user-tier skills
+
+Collisions on the same skill name resolve with **later-in-order winning** (workspace > tenant > public), so operators can override a tenant skill per workspace or a public skill per tenant. Symlinks whose real path escapes outside the current scan's allowed root are skipped with a warning (protected by `assert_symlink_parent_safe`). Tenant-level `extensions_config.json` (under `tenants/{tid}/`) can **disable** globally-enabled skills but **cannot re-enable** skills that are disabled at the global layer — disable-only semantics keep tenant overrides from loosening the platform default. Legacy single-tenant behavior is preserved when either id is missing.
+
 ### Identity Subsystem (`app/gateway/identity/`)
 
-**Status:** M1 (schema + bootstrap), M2 (authentication), and M3 (RBAC + tenant-scope auto-filter) landed. Gated behind `ENABLE_IDENTITY` env var (default off).
+**Status:** M1 (schema + bootstrap), M2 (authentication), M3 (RBAC + tenant-scope auto-filter), and M4 (storage isolation) landed. Gated behind `ENABLE_IDENTITY` env var (default off).
 
 **Components**:
-- `settings.py` — reads `ENABLE_IDENTITY`, `DEERFLOW_DATABASE_URL`, `DEERFLOW_REDIS_URL`, `DEERFLOW_BOOTSTRAP_ADMIN_EMAIL`, plus M2 auth knobs (`DEERFLOW_JWT_*`, `DEERFLOW_ACCESS_TOKEN_TTL_SEC`, `DEERFLOW_REFRESH_TOKEN_TTL_SEC`, `DEERFLOW_COOKIE_*`, `DEERFLOW_LOGIN_LOCKOUT_*`, `DEERFLOW_BCRYPT_COST`, `DEERFLOW_INTERNAL_SIGNING_KEY`, `IDENTITY_AUTO_PROVISION_TENANT`)
+- `settings.py` — reads `ENABLE_IDENTITY`, `DEERFLOW_DATABASE_URL`, `DEERFLOW_REDIS_URL`, `DEERFLOW_BOOTSTRAP_ADMIN_EMAIL`, `DEER_FLOW_HOME` (M4 storage root, default `backend/.deer-flow`), plus M2 auth knobs (`DEERFLOW_JWT_*`, `DEERFLOW_ACCESS_TOKEN_TTL_SEC`, `DEERFLOW_REFRESH_TOKEN_TTL_SEC`, `DEERFLOW_COOKIE_*`, `DEERFLOW_LOGIN_LOCKOUT_*`, `DEERFLOW_BCRYPT_COST`, `DEERFLOW_INTERNAL_SIGNING_KEY`, `IDENTITY_AUTO_PROVISION_TENANT`)
 - `models/` — 11 ORM tables matching spec §4 (tenants, users, memberships, workspaces, permissions, roles, role_permissions, user_roles, workspace_members, api_tokens, audit_logs). `TenantScoped` / `WorkspaceScoped` mixins (`models/base.py`) mark rows for auto-filter — new M4 tables subscribe by declaring the mixin.
 - `db.py` — async engine, session factory, `get_session()` dependency
 - `context.py` — `current_identity` / `current_tenant_id` / `current_session_id` ContextVars, plus M3's `with_platform_privilege()` context manager that temporarily bypasses the tenant auto-filter (for maintenance scripts, admin jobs).
@@ -321,6 +333,7 @@ make db-upgrade           # run alembic migrations
 make db-downgrade-one     # rollback one revision
 make identity-bootstrap   # run bootstrap seed manually
 make identity-keys        # generate (or reuse) the M2 RS256 keypair
+make identity-dirs TENANT_ID=<id> [WORKSPACE_ID=<id>]  # M4 tenant/workspace dir bootstrap (0700 perms, idempotent)
 make identity-test        # run identity test suite (needs postgres+redis)
 ```
 
@@ -355,7 +368,47 @@ Scopes: `"platform"` (permission check only), `"tenant"` (also verifies caller i
 
 **SQLAlchemy auto-filter:** When `ENABLE_IDENTITY=true`, `install_auto_filter(sessionmaker)` attaches `do_orm_execute` and `before_flush` listeners to the global Session class. Any mapped class that inherits `TenantScoped` or `WorkspaceScoped` gets an automatic `WHERE tenant_id = ?` / `workspace_id IN (...)` clause injected into every SELECT. Platform admins bypass; regular users cannot escape their tenant even via a JOIN. Insert guard rejects cross-tenant / cross-workspace writes with `PermissionDeniedError`. Use `with_platform_privilege()` (from `app.gateway.identity.context`) to opt out of the filter for migration scripts or admin jobs — it's logged at INFO so privileged access leaves a trail.
 
-**Roadmap:** M4 adds storage isolation, M5 adds LangGraph integration, M6 adds audit writer + cache invalidation producers, M7 adds admin UI + migration script. See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
+**Storage (M4):**
+
+- `app/gateway/identity/storage/paths.py` — 13 tenant-aware path helpers (`deerflow_home`, `tenant_root`, `workspace_root`, `thread_path`, `skills_public_root`, `skills_tenant_custom_root`, `skills_workspace_user_root`, `user_memory_path`, `tenant_shared_root`, `audit_fallback_path`, `audit_archive_path`, `migration_report_path`, `migration_lock_path`). All are derived from `$DEER_FLOW_HOME` (default `backend/.deer-flow`) and follow the spec §7.1 / §7.4 layout:
+
+  ```
+  $DEER_FLOW_HOME/
+    tenants/{tenant_id}/
+      custom/                      # tenant-scoped skills
+      shared/                      # reserved for P2
+      users/{user_id}/memory.json  # per-user memory
+      workspaces/{workspace_id}/
+        user/                      # workspace user-tier skills
+        threads/{thread_id}/
+          user-data/{workspace,uploads,outputs}
+          acp-workspace/
+    skills/public/                 # cross-tenant shared skills
+    _system/
+      audit_fallback/{yyyymmdd}.jsonl
+      audit_archive/{tid}/{yyyy-mm}.jsonl.gz
+      migration_report_{ts}.json
+      migration.lock
+  ```
+
+- `app/gateway/identity/storage/path_guard.py` — `PathEscapeError`, `assert_within_tenant_root(path, tenant_id)`, `safe_join(base, *parts)`, `assert_symlink_parent_safe(path, allowed_root)`. Every tenant-scoped I/O path in Gateway/harness routes through these guards.
+- `app/gateway/identity/storage/config_layers.py` — `load_layered_config(global_cfg, tenant_id, workspace_id, *, deerflow_home) -> (merged, cache_key)` layers `global → tenant → workspace` YAML fragments. Tenant/workspace overlays cannot set `SENSITIVE_GLOBAL_ONLY` fields (model API keys, model endpoints, provisioner keys, memory storage path) — any attempt raises `SensitiveFieldViolation`. The function is pure (returns `(merged, cache_key)`); Redis caching is the consumer layer's responsibility.
+- `app/gateway/identity/storage/cli.py` + `make identity-dirs TENANT_ID=X [WORKSPACE_ID=Y]` — idempotent directory bootstrap that creates the tenant tree with `0700` permissions. Safe to re-run; missing dirs are created, existing dirs are left alone.
+- **Harness tenant-aware paths**: `packages/harness/deerflow/config/paths.py::Paths` gained `resolve_thread_dir`, `resolve_sandbox_{work,uploads,outputs,user_data}_dir`, `resolve_acp_workspace_dir`, `ensure_thread_dirs_for`, and their host-side variants. Legacy methods are untouched so single-tenant callers keep working. `resolve_virtual_path` accepts optional `tenant_id`/`workspace_id` kwargs.
+- **Identity extraction helper**: `packages/harness/deerflow/agents/middlewares/_identity.py::extract_tenant_ids()` is the shared defensive reader for `state["identity"]` — returns `(tenant_id, workspace_id)` only when both are positive ints, otherwise `(None, None)`. Consumed by `ThreadDataMiddleware`, `SandboxMiddleware`, `UploadsMiddleware`, and `present_file_tool`.
+- **Middleware / router consumption**: `ThreadDataMiddleware` and `SandboxMiddleware` read `state["identity"]` and route through the tenant-aware path helpers when the pair is valid. Gateway routers `routers/artifacts.py` and `routers/uploads.py` enforce `assert_within_tenant_root` on every GET/POST/LIST/DELETE; cross-tenant attempts return a generic `403 "Access denied"` (no leak of tenant IDs or filesystem paths). Flag off → legacy flat paths.
+- **Channel identity deferred**: `app/channels/manager.py` still calls `Paths.resolve_virtual_path` without identity. Marked with `TODO(m5-identity)` — IM channel identity threading is tracked for the M5 follow-up pass; the M5 Gateway→LangGraph HMAC propagation work has landed (see below).
+
+**LangGraph identity propagation (M5):**
+
+- **HMAC header contract (`app/gateway/identity/propagation.py` + harness-side `deerflow.identity_propagation`):** Gateway signs the caller's `Identity` into `X-Deerflow-User-Id`, `X-Deerflow-Tenant-Id`, `X-Deerflow-Workspace-Id`, `X-Deerflow-Permissions`, `X-Deerflow-Session-Id`, `X-Deerflow-Identity-Ts`, `X-Deerflow-Identity-Sig` using `HMAC-SHA256(DEERFLOW_INTERNAL_SIGNING_KEY)` over `"{uid}|{tid}|{wid}|{perms_sorted}|{ts}"`. Canonical form + signer/verifier live in the harness so the agent runtime can verify without importing `app.*`. Replay window defaults to 300s (`DEERFLOW_HMAC_SKEW_SEC`).
+- **Outbound injection (`app/gateway/services._inject_identity_headers`):** `start_run()` stamps the signed header dict into `config["configurable"]["headers"]` on every run. Active `workspace_id` resolution order: explicit `configurable.workspace_id` → path param `wid`/`workspace_id`/`ws_id` → caller's first workspace membership. No-ops when the flag is off, signing key is missing, or the caller is anonymous.
+- **LangGraph `IdentityMiddleware` (`packages/harness/deerflow/agents/middlewares/identity_middleware.py`):** Registered at position 0 of the lead-agent middleware chain whenever `DEERFLOW_INTERNAL_SIGNING_KEY` is set (flag-scoped). Verifies headers, writes a `VerifiedIdentity` into `state["identity"]`. Tampered signatures and stale timestamps raise so the run fails loud. Missing headers is a silent no-op (backwards compat).
+- **Guardrail upgrade (`deerflow.guardrails.IdentityGuardrailMiddleware` + `TOOL_PERMISSION_MAP`):** Whitelist-mode permission gate sitting just before the (optional) OAP/allowlist `GuardrailMiddleware`. Denies unknown tools by default; mapped built-ins enforce their required tag (`bash`/`write_file`/`str_replace`/`task` → `thread:write`, `read_file`/`ls`/`present_files`/`view_image`/`ask_clarification` → `thread:read`). MCP tools may declare `required_permission` on their `BaseTool`; otherwise `DEFAULT_MCP_PERMISSION = "skill:invoke"` applies. `write_todos` is an internal-plumbing allowlist bypass. Flag-off / missing identity → fall through (no regression). Also registered only when the signing key is set.
+- **Subagent inheritance (`deerflow.subagents.SubagentExecutor(identity=...)` + `task_tool`):** `task_tool` reads `runtime.state["identity"]` and forwards it to the executor; `_build_initial_state` copies it into the subagent's starting state. The subagent's `IdentityMiddleware` detects the pre-populated state and does not overwrite, so the parent's identity propagates without a second HMAC roundtrip. Frozen permissions set = no elevation surface.
+- **Internal audit endpoint (`POST /internal/audit`, M5 stub):** HMAC-authenticated (separate `X-Deerflow-Internal-Sig` / `X-Deerflow-Internal-Ts` headers over `body|ts`). Payload matches `AuditEventPayload` (action + tenant/user/workspace/thread/resource/outcome). Stub writes to an in-memory queue; M6 replaces the queue with the real writer.
+
+**Roadmap:** M1 – M5 shipped. M6 adds the audit writer + cache invalidation producers. M7 adds the admin UI + migration script. See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
 
 ### Model Factory (`packages/harness/deerflow/models/factory.py`)
 

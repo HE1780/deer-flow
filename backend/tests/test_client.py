@@ -3018,6 +3018,10 @@ class TestBugListUploadsDeadCode:
             assert not non_existent.exists()
 
             mock_paths = MagicMock()
+            # M4 task 7: manager now uses ``resolve_sandbox_uploads_dir`` so it
+            # can thread tenant/workspace ids through when the caller supplies
+            # them. Both names are mocked for belt-and-braces coverage.
+            mock_paths.resolve_sandbox_uploads_dir.return_value = non_existent
             mock_paths.sandbox_uploads_dir.return_value = non_existent
 
             with patch("deerflow.uploads.manager.get_paths", return_value=mock_paths):

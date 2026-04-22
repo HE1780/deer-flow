@@ -205,3 +205,23 @@ def test_internal_signing_key_optional(monkeypatch):
     monkeypatch.setenv("DEERFLOW_INTERNAL_SIGNING_KEY", "abc123")
     get_identity_settings.cache_clear()
     assert get_identity_settings().internal_signing_key == "abc123"
+
+
+# --- M4 storage root ---
+
+
+def test_deer_flow_home_default_is_backend_dot_deer_flow(monkeypatch):
+    """Default falls back to {backend_dir}/.deer-flow independent of CWD."""
+    monkeypatch.delenv("DEER_FLOW_HOME", raising=False)
+    get_identity_settings.cache_clear()
+    s = get_identity_settings()
+    # Absolute, ends with backend/.deer-flow
+    assert os.path.isabs(s.deer_flow_home)
+    assert s.deer_flow_home.endswith(os.path.join("backend", ".deer-flow"))
+
+
+def test_deer_flow_home_from_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEER_FLOW_HOME", str(tmp_path))
+    get_identity_settings.cache_clear()
+    s = get_identity_settings()
+    assert s.deer_flow_home == str(tmp_path)

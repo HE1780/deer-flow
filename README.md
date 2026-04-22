@@ -217,9 +217,27 @@ To enable:
    - `DEERFLOW_BOOTSTRAP_ADMIN_EMAIL=you@example.com` (optional — creates the first platform admin)
 4. **Configure OIDC providers** (M2): copy `config/identity.yaml.example` to `config/identity.yaml` and fill in at least one provider (Okta, Azure AD, Keycloak, …). `$VAR` references are resolved against the environment, so credentials stay in your env file.
 5. **Generate JWT keys** (M2): `cd backend && make identity-keys` writes a 2048-bit RS256 keypair to `$DEERFLOW_HOME/_system/jwt_{private,public}.pem` (0600/0644). The gateway will generate them on first start if absent, but running the target explicitly is safer for production.
-6. Start the gateway normally. Bootstrap runs idempotently at startup.
+6. **Pick your storage root** (M4, optional): tenant-isolated filesystem state lives under `$DEER_FLOW_HOME` (default: `backend/.deer-flow`). Override it per-deployment — for example `DEER_FLOW_HOME=/var/lib/deerflow` — when you want the tenant tree on a dedicated volume. Bootstrap the directory layout for a new tenant/workspace with:
+   ```bash
+   cd backend && make identity-dirs TENANT_ID=<id> [WORKSPACE_ID=<id>]
+   ```
+   The target is idempotent and creates every directory with `0700` permissions. Layout:
+   ```
+   $DEER_FLOW_HOME/
+     tenants/{tenant_id}/
+       custom/                             # tenant-scoped skills
+       users/{user_id}/memory.json         # per-user memory
+       workspaces/{workspace_id}/
+         user/                             # workspace user-tier skills
+         threads/{thread_id}/
+           user-data/{workspace,uploads,outputs}
+           acp-workspace/
+     skills/public/                        # cross-tenant shared skills
+     _system/{audit_fallback,audit_archive,...}
+   ```
+7. Start the gateway normally. Bootstrap runs idempotently at startup.
 
-Once enabled, users sign in at `/api/auth/oidc/{provider}/login`, receive an HttpOnly `deerflow_session` cookie, and can manage their session + API tokens under `/api/me/*`. M3 adds route-level RBAC (the `@requires(tag, scope)` dependency), a SQLAlchemy auto-filter that scopes every query to the caller's tenant/workspace, and the read-only `/api/roles` + `/api/permissions` endpoints used by UI guards. M4 (storage isolation) is the next milestone.
+Once enabled, users sign in at `/api/auth/oidc/{provider}/login`, receive an HttpOnly `deerflow_session` cookie, and can manage their session + API tokens under `/api/me/*`. M3 adds route-level RBAC (the `@requires(tag, scope)` dependency), a SQLAlchemy auto-filter that scopes every query to the caller's tenant/workspace, and the read-only `/api/roles` + `/api/permissions` endpoints used by UI guards. M4 adds per-tenant/workspace storage isolation: sandbox bind mounts, thread data, uploads, artifacts, and tenant-scoped skills are all physically separated under `$DEER_FLOW_HOME`, with cross-tenant access rejected at the Gateway (`403 Access denied`) and at the sandbox mount / path-guard layers.
 
 Full roadmap and design: [`docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`](docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md).
 

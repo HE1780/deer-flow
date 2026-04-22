@@ -27,6 +27,14 @@ db-downgrade-one:
 identity-bootstrap:
 	PYTHONPATH=. uv run python -m app.gateway.identity.cli bootstrap
 
+# Create (or heal) a tenant's on-disk directory tree with 0700 perms.
+# Usage: make identity-dirs TENANT_ID=<id> [WORKSPACE_ID=<id>]
+identity-dirs:
+	@if [ -z "$(TENANT_ID)" ]; then echo "Usage: make identity-dirs TENANT_ID=<id> [WORKSPACE_ID=<id>]"; exit 1; fi
+	PYTHONPATH=. uv run python -m app.gateway.identity.storage.cli \
+		--tenant-id $(TENANT_ID) \
+		$(if $(WORKSPACE_ID),--workspace-id $(WORKSPACE_ID))
+
 identity-test:
 	PYTHONPATH=. IDENTITY_TEST_BACKEND=on uv run pytest tests/identity/ -v
 
