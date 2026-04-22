@@ -6,6 +6,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langgraph.config import get_config
 from langgraph.runtime import Runtime
 
+from deerflow.agents.middlewares._identity import extract_tenant_ids
 from deerflow.agents.thread_state import ThreadDataState
 from deerflow.config.paths import Paths, get_paths
 
@@ -20,42 +21,20 @@ class ThreadDataMiddlewareState(AgentState):
     an opaque ``Any`` here: the harness must remain decoupled from
     ``app.gateway.identity.auth.Identity`` (boundary enforced by
     ``tests/test_harness_boundary.py``). The middleware reads tenant_id and
-    workspace_id defensively, supporting both a dict and an attribute-bearing
-    object. When absent or incomplete, the middleware falls back to the
-    legacy non-stratified path layout.
+    workspace_id defensively (via
+    :func:`deerflow.agents.middlewares._identity.extract_tenant_ids`),
+    supporting both a dict and an attribute-bearing object. When absent or
+    incomplete, the middleware falls back to the legacy non-stratified path
+    layout.
     """
 
     thread_data: NotRequired[ThreadDataState | None]
     identity: NotRequired[Any]
 
 
-def _extract_tenant_ids(identity: Any) -> tuple[int | None, int | None]:
-    """Best-effort extraction of (tenant_id, workspace_id) from an opaque identity.
-
-    Identity may be a dict, a dataclass/SimpleNamespace, or ``None``. We
-    never import the concrete ``Identity`` type from ``app.*`` to preserve
-    the harness boundary. Both int-like fields are returned unchanged on
-    success; any other shape yields ``(None, None)`` and the middleware
-    falls back to the legacy path.
-    """
-    if identity is None:
-        return (None, None)
-
-    def _get(key: str) -> Any:
-        # Attribute lookup first (covers dataclass, SimpleNamespace, custom classes).
-        value = getattr(identity, key, None)
-        if value is not None:
-            return value
-        # Dict-style fallback. ``Mapping`` would be cleaner but importing it
-        # here is unnecessary — the ``.get`` duck-type is stable and fast.
-        if hasattr(identity, "get"):
-            try:
-                return identity.get(key)  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover — extremely defensive
-                return None
-        return None
-
-    return (_get("tenant_id"), _get("workspace_id"))
+# Re-exported for any existing import sites; the implementation lives in
+# ``_identity.py`` so the sandbox middleware can share it.
+_extract_tenant_ids = extract_tenant_ids
 
 
 class ThreadDataMiddleware(AgentMiddleware[ThreadDataMiddlewareState]):
@@ -141,7 +120,7 @@ class ThreadDataMiddleware(AgentMiddleware[ThreadDataMiddlewareState]):
         # defensively. In flag-off mode (pre-M5) ``state["identity"]`` is
         # absent and both ids end up None, which keeps the legacy path.
         identity = state.get("identity") if hasattr(state, "get") else None
-        tenant_id, workspace_id = _extract_tenant_ids(identity)
+        tenant_id, workspace_id = extract_tenant_ids(identity)
 
         if self._lazy_init:
             # Lazy initialization: only compute paths, don't create directories.

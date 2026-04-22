@@ -500,7 +500,14 @@ class Paths:
             "acp-workspace",
         )
 
-    def resolve_virtual_path(self, thread_id: str, virtual_path: str) -> Path:
+    def resolve_virtual_path(
+        self,
+        thread_id: str,
+        virtual_path: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> Path:
         """Resolve a sandbox virtual path to the actual host filesystem path.
 
         Args:
@@ -508,6 +515,13 @@ class Paths:
             virtual_path: Virtual path as seen inside the sandbox, e.g.
                           ``/mnt/user-data/outputs/report.pdf``.
                           Leading slashes are stripped before matching.
+            tenant_id: Optional tenant ID (M4 storage isolation). Combined with
+                ``workspace_id``, routes the resolved path under
+                ``tenants/{tenant_id}/workspaces/{workspace_id}/threads/.../user-data``.
+                When either id is missing, falls back to the legacy
+                ``threads/{thread_id}/user-data`` base so flag-off callers see
+                unchanged behaviour.
+            workspace_id: Optional workspace ID (pair with ``tenant_id``).
 
         Returns:
             The resolved absolute host filesystem path.
@@ -525,7 +539,9 @@ class Paths:
             raise ValueError(f"Path must start with /{prefix}")
 
         relative = stripped[len(prefix) :].lstrip("/")
-        base = self.sandbox_user_data_dir(thread_id).resolve()
+        base = self.resolve_sandbox_user_data_dir(
+            thread_id, tenant_id=tenant_id, workspace_id=workspace_id
+        ).resolve()
         actual = (base / relative).resolve()
 
         try:
