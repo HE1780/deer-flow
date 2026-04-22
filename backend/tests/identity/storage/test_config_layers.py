@@ -360,3 +360,35 @@ def test_merge_config_with_non_mapping_yaml_raises(tmp_path: Path) -> None:
         load_layered_config(
             global_path, tenant_id=None, workspace_id=None, deerflow_home=tmp_path
         )
+
+
+def test_sensitive_field_null_value_also_raises() -> None:
+    """A tenant overlay that sets a sensitive field to YAML null still violates.
+
+    The contract is "tenant must not TOUCH these keys", not "tenant must
+    not set a truthy value". Without this guard, ``api_key: ~`` would
+    clobber the global secret with ``None`` through deep-merge.
+    """
+
+    with pytest.raises(SensitiveFieldViolation) as exc_info:
+        merge_config(
+            {"sandbox": {"provisioner": {"api_key": "SECRET"}}},
+            {"sandbox": {"provisioner": {"api_key": None}}},
+            None,
+        )
+
+    msg = str(exc_info.value)
+    assert "tenant" in msg
+    assert "sandbox.provisioner.api_key" in msg
+
+
+def test_workspace_id_without_tenant_raises(tmp_path: Path) -> None:
+    """``workspace_id`` without ``tenant_id`` is an invalid arg combination."""
+
+    global_path = tmp_path / "global.yaml"
+    _write_yaml(global_path, {"foo": 1})
+
+    with pytest.raises(ValueError, match="workspace_id requires tenant_id"):
+        load_layered_config(
+            global_path, tenant_id=None, workspace_id=7, deerflow_home=tmp_path
+        )

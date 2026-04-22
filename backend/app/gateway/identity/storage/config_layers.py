@@ -126,6 +126,9 @@ def load_layered_config(
         :data:`SENSITIVE_GLOBAL_ONLY`.
     """
 
+    if tenant_id is None and workspace_id is not None:
+        raise ValueError("workspace_id requires tenant_id to be set")
+
     global_cfg = _load_yaml_or_empty(global_path)
 
     tenant_cfg: dict[str, Any] | None = None
@@ -292,12 +295,13 @@ def _walk(node: Any, segments: list[tuple[str, bool]]) -> bool:
     """Return True if following ``segments`` from ``node`` reaches a set value."""
 
     if not segments:
-        # We consumed the whole path and landed on a value — any non-None
-        # value counts as "set". (An explicit ``None`` from YAML is treated
-        # as "not set" to avoid false positives on ``key: ~`` placeholder
-        # entries; the layer can still erase the key via deep merge, but
-        # that's a separate concern.)
-        return node is not None
+        # We consumed the whole path and landed on a value — the contract
+        # is "tenant must not TOUCH these keys", so mere presence counts
+        # as a violation regardless of the value (including explicit
+        # ``None`` / ``~``). This matters because a tenant overlay like
+        # ``api_key: null`` would otherwise clobber the global secret
+        # with ``None`` through deep-merge.
+        return True
 
     key, is_list = segments[0]
     rest = segments[1:]
