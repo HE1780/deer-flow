@@ -1,4 +1,4 @@
-from typing import Annotated, NotRequired, TypedDict
+from typing import Annotated, Any, NotRequired, TypedDict
 
 from langchain.agents import AgentState
 
@@ -53,3 +53,7 @@ class ThreadState(AgentState):
     todos: NotRequired[list | None]
     uploaded_files: NotRequired[list[dict] | None]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]  # image_path -> {base64, mime_type}
+    # Identity carried from the Gateway via HMAC-signed headers (M5). Opaque
+    # (``Any``) so the harness stays decoupled from the Gateway ``Identity``
+    # dataclass; consumers use ``extract_tenant_ids`` + attribute lookups.
+    identity: NotRequired[Any]
