@@ -74,6 +74,9 @@ class IdentitySettings:
     login_lockout_block_sec: int
     bcrypt_cost: int
     internal_signing_key: str | None
+    # M5: allowed clock skew (seconds) for HMAC identity propagation between
+    # Gateway and LangGraph. Default 300s matches spec §5.4.
+    hmac_skew_sec: int
 
 
 @lru_cache(maxsize=1)
@@ -110,4 +113,5 @@ def get_identity_settings() -> IdentitySettings:
         login_lockout_block_sec=_env_int("DEERFLOW_LOGIN_LOCKOUT_BLOCK_SEC", 900),
         bcrypt_cost=_env_int("DEERFLOW_BCRYPT_COST", 12),
         internal_signing_key=os.environ.get("DEERFLOW_INTERNAL_SIGNING_KEY") or None,
+        hmac_skew_sec=_env_int("DEERFLOW_HMAC_SKEW_SEC", 300),
     )
