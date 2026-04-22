@@ -309,7 +309,7 @@ Collisions on the same skill name resolve with **later-in-order winning** (works
 
 ### Identity Subsystem (`app/gateway/identity/`)
 
-**Status:** M1 (schema + bootstrap), M2 (authentication), M3 (RBAC + tenant-scope auto-filter), and M4 (storage isolation) landed. Gated behind `ENABLE_IDENTITY` env var (default off).
+**Status:** M1 (schema + bootstrap), M2 (authentication), M3 (RBAC + tenant-scope auto-filter), M4 (storage isolation), M5 (LangGraph identity propagation), and M6 (audit pipeline) landed. Gated behind `ENABLE_IDENTITY` env var (default off).
 
 **Components**:
 - `settings.py` — reads `ENABLE_IDENTITY`, `DEERFLOW_DATABASE_URL`, `DEERFLOW_REDIS_URL`, `DEERFLOW_BOOTSTRAP_ADMIN_EMAIL`, `DEER_FLOW_HOME` (M4 storage root, default `backend/.deer-flow`), plus M2 auth knobs (`DEERFLOW_JWT_*`, `DEERFLOW_ACCESS_TOKEN_TTL_SEC`, `DEERFLOW_REFRESH_TOKEN_TTL_SEC`, `DEERFLOW_COOKIE_*`, `DEERFLOW_LOGIN_LOCKOUT_*`, `DEERFLOW_BCRYPT_COST`, `DEERFLOW_INTERNAL_SIGNING_KEY`, `IDENTITY_AUTO_PROVISION_TENANT`)
@@ -406,9 +406,31 @@ Scopes: `"platform"` (permission check only), `"tenant"` (also verifies caller i
 - **LangGraph `IdentityMiddleware` (`packages/harness/deerflow/agents/middlewares/identity_middleware.py`):** Registered at position 0 of the lead-agent middleware chain whenever `DEERFLOW_INTERNAL_SIGNING_KEY` is set (flag-scoped). Verifies headers, writes a `VerifiedIdentity` into `state["identity"]`. Tampered signatures and stale timestamps raise so the run fails loud. Missing headers is a silent no-op (backwards compat).
 - **Guardrail upgrade (`deerflow.guardrails.IdentityGuardrailMiddleware` + `TOOL_PERMISSION_MAP`):** Whitelist-mode permission gate sitting just before the (optional) OAP/allowlist `GuardrailMiddleware`. Denies unknown tools by default; mapped built-ins enforce their required tag (`bash`/`write_file`/`str_replace`/`task` → `thread:write`, `read_file`/`ls`/`present_files`/`view_image`/`ask_clarification` → `thread:read`). MCP tools may declare `required_permission` on their `BaseTool`; otherwise `DEFAULT_MCP_PERMISSION = "skill:invoke"` applies. `write_todos` is an internal-plumbing allowlist bypass. Flag-off / missing identity → fall through (no regression). Also registered only when the signing key is set.
 - **Subagent inheritance (`deerflow.subagents.SubagentExecutor(identity=...)` + `task_tool`):** `task_tool` reads `runtime.state["identity"]` and forwards it to the executor; `_build_initial_state` copies it into the subagent's starting state. The subagent's `IdentityMiddleware` detects the pre-populated state and does not overwrite, so the parent's identity propagates without a second HMAC roundtrip. Frozen permissions set = no elevation surface.
-- **Internal audit endpoint (`POST /internal/audit`, M5 stub):** HMAC-authenticated (separate `X-Deerflow-Internal-Sig` / `X-Deerflow-Internal-Ts` headers over `body|ts`). Payload matches `AuditEventPayload` (action + tenant/user/workspace/thread/resource/outcome). Stub writes to an in-memory queue; M6 replaces the queue with the real writer.
+- **Internal audit endpoint (`POST /internal/audit`):** HMAC-authenticated (separate `X-Deerflow-Internal-Sig` / `X-Deerflow-Internal-Ts` headers over `body|ts`). Payload matches `AuditEventPayload` (action + tenant/user/workspace/thread/resource/outcome). M6 forwards the event into the real `AuditBatchWriter` when `app.state.audit_writer` is set; falls back to the legacy in-memory queue when it isn't (preserving M5 test contracts).
 
-**Roadmap:** M1 – M5 shipped. M6 adds the audit writer + cache invalidation producers. M7 adds the admin UI + migration script. See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
+**Audit pipeline (M6, `app/gateway/identity/audit/`):**
+
+- `events.py` — `AuditEvent` frozen dataclass + `KNOWN_ACTIONS` taxonomy + `KEY_CRITICAL_ACTIONS` subset. `is_critical_action(action, http_method=...)` is the single decision point: enumerated criticals or any HTTP write method always go through the fallback path on PG outage.
+- `redact.py` — `redact_metadata(action, raw)`: scrubs values of any key matching `/password|token|secret|key|authorization/i` to `***`, drops `http.body`/`body`/`request_body`/`response_body`, truncates `command`/`cmd` to 500 chars, and special-cases `tool.called(write_file)` to keep `path`+`size` while dropping `content`. Recurses through nested dicts and lists.
+- `fallback.py` — `FallbackLog` is an `asyncio.Lock`-serialised JSONL writer at `$DEER_FLOW_HOME/_audit/fallback.jsonl`. `drain()` rotates the file before reading so concurrent writers don't lose events; on read failure the rotated file is restored.
+- `writer.py` — `AuditBatchWriter` runs a single background `_flush_loop` (max `flush_interval_sec=1.0`, `batch_size=500`, `queue_max=10_000`). Queue full + critical → synchronous insert (with PG-failure fallback). Queue full + non-critical → drop + `metrics["dropped"]++`. PG failure during a batch → critical events route to the fallback log, non-critical are dropped. Backfill happens at the start of each successful flush (cheap when no file exists).
+- `middleware.py` — `AuditMiddleware` registered as the outermost HTTP middleware (wraps `IdentityMiddleware` so it sees `request.state.identity` after downstream populates it). Skips `/api/me`, `/health`, `/docs`, `/internal/*`, `/api/langgraph`. Audits all writes; reads only on `/api/auth/*`, `/api/audit*`, `/api/admin/*`, `/api/tenants/*`, or 401/403 responses. Action derivation maps OIDC callbacks to `user.login.{success,failure}`, `/logout` to `user.logout`, 401/403 to `authz.api.denied`, everything else to `http.<method>`.
+- `api.py` — `GET /api/tenants/{tid}/audit` (paginated, base64url cursor of `created_at|id`, default 7-day / max 90-day window, `limit` 1–500), `GET /api/tenants/{tid}/audit/export` (StreamingResponse CSV, hard-capped at 100k rows → 413, emits its own `audit.exported` event), `GET /api/admin/audit` (cross-tenant, requires `audit:read.all`).
+- `retention.py` — `run_retention_job(session_maker, retention_days=90, archive_dir=...)`: archives `(tenant_id, year_month)`-grouped rows older than the cutoff into `{archive_dir}/{tenant_id}/{yyyy-mm}.jsonl.gz`, then deletes the same row IDs in the same transaction (idempotent on retry). `start_retention_task` wraps it in an asyncio loop with stop-event for daily cron.
+- `alembic/versions/20260421_0003_audit_grants.py` — REVOKE UPDATE/DELETE on `identity.audit_logs` from the `deerflow` app role; GRANT INSERT+SELECT only. A `deerflow_retention` role gets DELETE for the retention job. Falls through silently when those roles don't exist (dev superuser deploys are unaffected since superuser bypasses GRANT).
+
+**Audit producers wired in M6:**
+- M3 RBAC `_queue_denied()` enqueues `authz.api.denied` (critical) when the writer is mounted.
+- M5 `POST /internal/audit` forwards to the writer with `is_critical_action(payload.action)`.
+- Auth router actions (login/logout/refresh) ride on the `AuditMiddleware` HTTP-event capture — no inline enqueues needed.
+
+**Audit env vars:**
+- `DEER_FLOW_HOME` — fallback JSONL + retention archive root (reused from M4).
+- Retention day count, archive dir, and schedule interval are currently passed at task-spawn time; they're not yet env-tunable. (M7 may surface them.)
+
+**When flag is OFF:** none of the M6 components are imported by lifespan, no batch writer task is spawned, no PG insert is attempted, and `/api/tenants/*/audit*` + `/api/admin/audit` return 404. Verified by `tests/identity/test_feature_flag_offline.py::test_audit_routes_404_when_flag_off`.
+
+**Roadmap:** M1 – M6 shipped. M7 adds the admin UI + migration script. See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
 
 ### Model Factory (`packages/harness/deerflow/models/factory.py`)
 

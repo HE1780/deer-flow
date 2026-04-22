@@ -106,8 +106,9 @@ def _queue_denied(
 ) -> None:
     """Audit hook for denied requests.
 
-    M3: best-effort structured log. M6 replaces this with the real
-    AuditEvent writer.
+    Logs and (when M6 audit writer is mounted on ``app.state``) enqueues
+    a real ``authz.api.denied`` AuditEvent marked critical so PG outage
+    routes it to the fallback file.
     """
     logger.info(
         "authz.api.denied",
@@ -122,3 +123,35 @@ def _queue_denied(
             "ip": identity.ip,
         },
     )
+
+    writer = getattr(getattr(request.app, "state", None), "audit_writer", None)
+    if writer is None:
+        return
+    try:
+        from app.gateway.identity.audit.events import AuditEvent
+        from app.gateway.identity.audit.redact import redact_metadata
+
+        ev = AuditEvent(
+            action="authz.api.denied",
+            result="failure",
+            tenant_id=identity.tenant_id,
+            user_id=identity.user_id,
+            ip=identity.ip,
+            error_code="PERMISSION_DENIED",
+            metadata=redact_metadata(
+                "authz.api.denied",
+                {
+                    "tag": tag,
+                    "scope": scope,
+                    "horizontal": horizontal,
+                    "method": request.method,
+                    "path": request.url.path,
+                },
+            ),
+        )
+        # Run on the running loop without awaiting — RBAC dependency is sync.
+        import asyncio
+
+        asyncio.create_task(writer.enqueue(ev, critical=True))
+    except Exception:
+        logger.debug("audit enqueue from RBAC failed", exc_info=True)

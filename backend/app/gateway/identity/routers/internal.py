@@ -117,11 +117,36 @@ async def ingest_audit_event(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"invalid payload: {exc}") from exc
 
-    with _audit_queue_lock:
-        _audit_queue.append(payload.model_dump())
+    # M6: forward to real AuditBatchWriter when present; otherwise fall
+    # back to the M5 in-memory queue (kept for tests that haven't moved).
+    writer = getattr(getattr(request.app, "state", None), "audit_writer", None)
+    if writer is not None:
+        from app.gateway.identity.audit.events import AuditEvent, is_critical_action
+        from app.gateway.identity.audit.redact import redact_metadata
+
+        meta = dict(payload.extra or {})
+        if payload.thread_id:
+            meta["thread_id"] = payload.thread_id
+        if payload.resource:
+            meta["resource"] = payload.resource
+        if payload.outcome:
+            meta["outcome"] = payload.outcome
+
+        ev = AuditEvent(
+            action=payload.action,
+            result="failure" if (payload.outcome and payload.outcome != "success") else "success",
+            tenant_id=payload.tenant_id,
+            user_id=payload.user_id,
+            workspace_id=payload.workspace_id,
+            metadata=redact_metadata(payload.action, meta),
+        )
+        await writer.enqueue(ev, critical=is_critical_action(payload.action))
+    else:
+        with _audit_queue_lock:
+            _audit_queue.append(payload.model_dump())
 
     logger.debug(
-        "audit event queued (M5 stub): action=%s user=%s tenant=%s",
+        "audit event ingested: action=%s user=%s tenant=%s",
         payload.action,
         payload.user_id,
         payload.tenant_id,
