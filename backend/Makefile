@@ -42,3 +42,18 @@ identity-test:
 # $DEERFLOW_HOME/_system/ by default; respects DEERFLOW_JWT_*_KEY_PATH.
 identity-keys:
 	PYTHONPATH=. uv run python -c "from app.gateway.identity.auth.jwt import ensure_rsa_keypair; from app.gateway.identity.settings import get_identity_settings; s = get_identity_settings(); priv, pub = ensure_rsa_keypair(s.jwt_private_key_path, s.jwt_public_key_path); print(f'private: {s.jwt_private_key_path}'); print(f'public:  {s.jwt_public_key_path}')"
+
+# ── M7 Migration (legacy single-tenant → multi-tenant layout) ──────────────
+# Dry-run never writes. Real migrations need the DB running; use --no-db for
+# air-gapped rehearsals on a tmp DEER_FLOW_HOME.
+identity-migrate-dry:
+	PYTHONPATH=. uv run python ../scripts/migrate_to_multitenant.py --dry-run
+
+identity-migrate-apply:
+	PYTHONPATH=. uv run python ../scripts/migrate_to_multitenant.py --apply
+
+# Rollback takes the report written by a prior --apply run:
+#   make identity-migrate-rollback REPORT=backend/.deer-flow/_system/migration_report_....json
+identity-migrate-rollback:
+	@if [ -z "$(REPORT)" ]; then echo "Usage: make identity-migrate-rollback REPORT=<path>"; exit 1; fi
+	PYTHONPATH=. uv run python ../scripts/migrate_to_multitenant.py --rollback --report $(REPORT)
