@@ -146,6 +146,39 @@ class SessionStore:
             "" if tenant_id is None else str(tenant_id),
         )
 
+    async def count_active(self) -> int:
+        """Return the number of non-revoked session records in Redis.
+
+        Implementation uses a non-blocking ``SCAN`` over the
+        ``{prefix}:session:*`` keyspace with a large ``COUNT`` hint to
+        minimise round-trips. The ``by_user:`` index keys are filtered
+        out by a prefix check — Redis glob cannot express "not" so the
+        filter lives here. Revoked sessions are excluded by reading the
+        ``revoked`` flag on each candidate.
+
+        This is intended to be called from ``/metrics`` scrapes (a few
+        times per minute); it is NOT a hot-path helper.
+        """
+
+        match = f"{self._prefix}:session:*"
+        by_user_prefix = f"{self._prefix}:session:by_user:"
+        count = 0
+        cursor = 0
+        while True:
+            cursor, keys = await self._redis.scan(cursor=cursor, match=match, count=500)
+            for k in keys:
+                if isinstance(k, bytes):
+                    k = k.decode()
+                if k.startswith(by_user_prefix):
+                    continue
+                revoked = await self._redis.hget(k, "revoked")
+                if revoked in (b"1", "1"):
+                    continue
+                count += 1
+            if cursor == 0:
+                break
+        return count
+
     # ---- internals ----
 
     @staticmethod

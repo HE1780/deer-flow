@@ -17,7 +17,7 @@ from app.gateway.identity.auth.lockout import LoginLockout
 from app.gateway.identity.auth.oidc import OIDCClient
 from app.gateway.identity.auth.runtime import AuthRuntime, clear_runtime, set_runtime
 from app.gateway.identity.auth.session import SessionStore
-from app.gateway.identity.bootstrap import bootstrap as identity_bootstrap
+from app.gateway.identity.bootstrap_lock import bootstrap_with_advisory_lock
 from app.gateway.identity.db import clear_global_engine, create_engine_and_sessionmaker, set_global_engine
 from app.gateway.identity.middlewares.identity import IdentityMiddleware
 from app.gateway.identity.middlewares.tenant_scope import install_auto_filter
@@ -25,6 +25,7 @@ from app.gateway.identity.routers import admin_stub as identity_admin_stub_route
 from app.gateway.identity.routers import auth as identity_auth_router
 from app.gateway.identity.routers import internal as identity_internal_router
 from app.gateway.identity.routers import me as identity_me_router
+from app.gateway.identity.routers import metrics as identity_metrics_router
 from app.gateway.identity.routers import roles as identity_roles_router
 from app.gateway.identity.settings import get_identity_settings
 from app.gateway.routers import (
@@ -123,7 +124,11 @@ async def _init_identity_subsystem() -> None:
     set_global_engine(engine, maker)
 
     async with maker() as session:
-        await identity_bootstrap(session, bootstrap_admin_email=settings.bootstrap_admin_email)
+        await bootstrap_with_advisory_lock(
+            engine,
+            session,
+            bootstrap_admin_email=settings.bootstrap_admin_email,
+        )
 
     # M2: build the AuthRuntime (JWT keys, session store, OIDC clients, lockout).
     await _init_auth_runtime(settings, maker)
@@ -198,6 +203,20 @@ async def _init_audit_subsystem(app: FastAPI) -> None:
     writer = AuditBatchWriter(_identity_db._sessionmaker, fallback=fallback)
     await writer.start()
     app.state.audit_writer = writer
+
+    # Wire the writer + session source into the process-wide metrics
+    # singleton so /metrics can render queue depth, fallback writes, and
+    # the live session count without duplicating any state.
+    from app.gateway.identity.auth.runtime import get_runtime
+    from app.gateway.identity.metrics import get_metrics
+
+    metrics = get_metrics()
+    metrics.attach_audit_writer(writer)
+    try:
+        metrics.attach_session_source(get_runtime().session_store)
+    except Exception:
+        logger.debug("session source attach skipped (auth runtime missing)", exc_info=True)
+
     logger.info("audit batch writer started")
 
 
@@ -209,6 +228,17 @@ async def _shutdown_audit_subsystem(app: FastAPI) -> None:
         await writer.stop()
     finally:
         app.state.audit_writer = None
+        # Detach from the metrics singleton so /metrics (if still
+        # reachable during a partial shutdown) reports zero rather than
+        # a stale qsize() from a stopped writer.
+        try:
+            from app.gateway.identity.metrics import get_metrics
+
+            m = get_metrics()
+            m.attach_audit_writer(None)
+            m.attach_session_source(None)
+        except Exception:
+            logger.debug("metrics detach failed", exc_info=True)
     logger.info("audit batch writer stopped")
 
 
@@ -416,6 +446,8 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
         app.include_router(identity_internal_router.router)
         # M6 audit query + export
         app.include_router(identity_audit_router.router)
+        # M7/C: Prometheus metrics endpoint
+        app.include_router(identity_metrics_router.router)
         # IdentityMiddleware first → executes innermost (sets state.identity).
         # AuditMiddleware after → executes outermost (sees the resolved
         # identity on the way out + records request duration end-to-end).

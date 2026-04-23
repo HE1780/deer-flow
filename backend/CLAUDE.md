@@ -450,7 +450,21 @@ make identity-migrate-rollback REPORT=<path>   # reverse a prior apply using its
 
 Exit codes: `0` success, `1` pre-check failure (DB or home not writable), `2` argument error, `3` lock contention, `4` one or more items failed. `--no-db` skips the PG connectivity pre-check and the advisory lock for air-gapped rehearsals; `--legacy-home` + `--repo-root` redirect the source roots for tests. When a DB engine is wired, audit events route to the M6 fallback JSONL at `$DEER_FLOW_HOME/_audit/fallback.jsonl` so the batch writer's next backfill pushes them into Postgres.
 
-**Roadmap:** M1 – M6 shipped. M7 adds the admin UI + migration script (migration landed; admin UI + release parts still open). See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
+**M7 release hardening (C.1 – C.5 + C.7):**
+
+- `app/gateway/identity/bootstrap_lock.py` — `bootstrap_with_advisory_lock(engine, session, *, bootstrap_admin_email=None)` wraps the M1 `bootstrap()` seed inside a blocking PG advisory lock (`pg_advisory_lock(hashtext('deerflow_bootstrap'))`), so K8s rolling restarts cannot race on idempotent seed inserts. Lock runs on a **separate** connection from the seed session so it survives the inner `session.commit()`. On acquire failure the wrapper degrades to the pre-M7 path with a logged warning — preserves prior behaviour rather than deadlocking startup. Wired into `app/gateway/app.py::_init_identity_subsystem`.
+- `app/gateway/identity/metrics.py` — dependency-free Prometheus text-format exporter. Process-wide `IdentityMetrics` singleton with thread-safe counters: `identity_login_total{result=success|failure}`, `identity_authz_denied_total` (counters — recorded by `AuditMiddleware._emit_identity_metric` when it observes matching actions) plus `identity_session_active` (gauge — `SessionStore.count_active()`), `audit_queue_depth` (gauge — `AuditBatchWriter.qsize()`), and `audit_write_failures_total` (counter — `flush_errors + fallback_written` from the writer's `metrics` dict).
+- `app/gateway/identity/routers/metrics.py` — `GET /metrics` returning the canonical `text/plain; version=0.0.4` payload. Unauthenticated (scrape is network-level gated) and included only when `ENABLE_IDENTITY=true`; absent → 404 otherwise (`tests/identity/test_feature_flag_offline.py::test_metrics_route_absent_when_flag_off`).
+- `app/gateway/identity/auth/session.py::SessionStore.count_active()` — SCAN-based Redis probe that returns the count of non-revoked sessions; used once per scrape.
+- `app/gateway/identity/audit/middleware.py` — `dispatch` mirrors enqueued events through `_emit_identity_metric(action)` so the Prometheus counters track the same population the audit log does.
+
+Lifespan attaches the writer + session source to the metrics singleton in `_init_audit_subsystem` and detaches them in `_shutdown_audit_subsystem`, so the gauges never read a stopped writer or a disposed Redis client.
+
+Docs: `docs/UPGRADE_v2.md` (path A greenfield / path B migration), `docs/identity-alerting.md` (sample Prometheus alert rules + Grafana panels), `docs/identity-release-checklist.md` (spec §11.7 manual runbook — IdP smoke tests, 1 000-thread rehearsal, rollback drill), `CHANGELOG.md` (identity release notes).
+
+**Still open for a follow-up session:** M7 Part A (14 admin pages + Playwright E2E) and Part C.8 (GitHub Actions end-to-end smoke — needs OIDC mock IdP infrastructure).
+
+**Roadmap:** M1 – M6 + M7 B (migration) + M7 C (release hardening) shipped. M7 A (admin UI) still open. See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
 
 ### Model Factory (`packages/harness/deerflow/models/factory.py`)
 
