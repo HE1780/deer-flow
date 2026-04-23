@@ -63,7 +63,7 @@ export function useSwitchTenant() {
     mutationFn: (tenantId: number) => identityApi.switchTenant(tenantId),
     onSuccess: () => {
       // Identity cookie is re-issued server-side; re-fetch everything identity-scoped.
-      qc.invalidateQueries({ queryKey: identityKeys.all });
+      void qc.invalidateQueries({ queryKey: identityKeys.all });
     },
   });
 }
@@ -81,7 +81,7 @@ export function useTenants(
 export function useTenant(id: number | undefined) {
   return useQuery({
     queryKey: id ? identityKeys.tenant(id) : [...identityKeys.tenants(), "disabled"],
-    queryFn: () => identityApi.getTenant(id as number),
+    queryFn: () => identityApi.getTenant(id!),
     enabled: !!id,
   });
 }
@@ -94,7 +94,7 @@ export function useUsers(
     queryKey: tenantId
       ? [...identityKeys.users(tenantId), params]
       : [...identityKeys.all, "users", "disabled"],
-    queryFn: () => identityApi.listUsers(tenantId as number, params),
+    queryFn: () => identityApi.listUsers(tenantId!, params),
     placeholderData: keepPreviousData,
     enabled: !!tenantId,
   });
@@ -110,7 +110,7 @@ export function useUser(
         ? identityKeys.user(tenantId, userId)
         : [...identityKeys.all, "user", "disabled"],
     queryFn: () =>
-      identityApi.getUser(tenantId as number, userId as number),
+      identityApi.getUser(tenantId!, userId!),
     enabled: !!tenantId && !!userId,
   });
 }
@@ -123,7 +123,7 @@ export function useWorkspaces(
     queryKey: tenantId
       ? [...identityKeys.workspaces(tenantId), params]
       : [...identityKeys.all, "workspaces", "disabled"],
-    queryFn: () => identityApi.listWorkspaces(tenantId as number, params),
+    queryFn: () => identityApi.listWorkspaces(tenantId!, params),
     placeholderData: keepPreviousData,
     enabled: !!tenantId,
   });
@@ -141,8 +141,8 @@ export function useWorkspaceMembers(
         : [...identityKeys.all, "workspace-members", "disabled"],
     queryFn: () =>
       identityApi.listWorkspaceMembers(
-        tenantId as number,
-        wsId as number,
+        tenantId!,
+        wsId!,
         params,
       ),
     placeholderData: keepPreviousData,
@@ -159,7 +159,7 @@ export function useTenantTokens(
       ? [...identityKeys.tokens(), tenantId, params]
       : [...identityKeys.tokens(), "disabled"],
     queryFn: () =>
-      identityApi.listTenantTokens(tenantId as number, params),
+      identityApi.listTenantTokens(tenantId!, params),
     placeholderData: keepPreviousData,
     enabled: !!tenantId,
   });
@@ -174,7 +174,7 @@ export function useAudit(
     queryKey: tenantId
       ? identityKeys.audit(tenantId, filterKey)
       : [...identityKeys.all, "audit", "disabled"],
-    queryFn: () => identityApi.listAudit(tenantId as number, filters),
+    queryFn: () => identityApi.listAudit(tenantId!, filters),
     placeholderData: keepPreviousData,
     enabled: !!tenantId,
   });

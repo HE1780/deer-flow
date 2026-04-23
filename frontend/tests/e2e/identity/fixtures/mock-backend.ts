@@ -112,10 +112,9 @@ export async function mockAdmin(
   // beats the wildcard.
   await page.route(/\/api\/admin\/tenants\/(\d+)/, (route: Route) => {
     const id = Number(
-      route
+      (/\/tenants\/(\d+)/.exec(route
         .request()
-        .url()
-        .match(/\/tenants\/(\d+)/)?.[1] ?? 0,
+        .url()))?.[1] ?? 0,
     );
     const detail = opts.tenantDetail?.[id];
     return route.fulfill(
@@ -142,10 +141,9 @@ export async function mockAdmin(
     /\/api\/tenants\/(\d+)\/users\/(\d+)/,
     (route: Route) => {
       const uid = Number(
-        route
+        (/\/users\/(\d+)/.exec(route
           .request()
-          .url()
-          .match(/\/users\/(\d+)/)?.[1] ?? 0,
+          .url()))?.[1] ?? 0,
       );
       const detail = opts.userDetail?.[uid];
       return route.fulfill(
@@ -172,10 +170,9 @@ export async function mockAdmin(
     /\/api\/tenants\/(\d+)\/workspaces\/(\d+)\/members/,
     (route: Route) => {
       const wid = Number(
-        route
+        (/\/workspaces\/(\d+)\/members/.exec(route
           .request()
-          .url()
-          .match(/\/workspaces\/(\d+)\/members/)?.[1] ?? 0,
+          .url()))?.[1] ?? 0,
       );
       const data = opts.workspaceMembers?.[wid] ?? { items: [], total: 0 };
       return route.fulfill({

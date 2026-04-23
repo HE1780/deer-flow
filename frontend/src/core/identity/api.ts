@@ -22,7 +22,11 @@ function qs(params: Record<string, unknown>): string {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === null || v === "") continue;
-    p.set(k, String(v));
+    // Only primitives survive URL encoding; objects would stringify to
+    // "[object Object]" which silently corrupts the query. Skip them.
+    if (typeof v === "string") p.set(k, v);
+    else if (typeof v === "number" || typeof v === "boolean")
+      p.set(k, v.toString());
   }
   const s = p.toString();
   return s ? `?${s}` : "";
