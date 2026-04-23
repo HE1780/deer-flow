@@ -264,3 +264,69 @@ def test_get_user_detail_platform_admin(admin_app):
     body = r.json()
     assert body["id"] == 10
     assert set(body["roles"]) == {"tenant_owner", "member"}
+
+
+def test_list_workspaces_tenant_owner(admin_app):
+    app, holder = admin_app
+    holder["identity"] = _identity_for_role("tenant_owner", tenant_id=5)
+    ws = SimpleNamespace(
+        id=7, tenant_id=5, slug="main", name="Main", description=None,
+        created_at=datetime(2026, 4, 10, tzinfo=timezone.utc),
+    )
+
+    class _WS(_StubSession):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, stmt):
+            self.calls += 1
+            result = MagicMock()
+            if self.calls == 1:
+                result.scalars.return_value.all.return_value = [ws]
+            elif self.calls == 2:
+                result.scalar.return_value = 1  # total
+            else:
+                result.all.return_value = [(7, 4)]  # (workspace_id, member_count)
+            return result
+
+    holder["session"] = _WS()
+    with TestClient(app) as c:
+        r = c.get("/api/tenants/5/workspaces")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["items"][0]["slug"] == "main"
+    assert body["items"][0]["member_count"] == 4
+
+
+def test_list_workspace_members(admin_app):
+    app, holder = admin_app
+    holder["identity"] = _identity_for_role("tenant_owner", tenant_id=5)
+    row = (
+        SimpleNamespace(id=11, email="b@b.com", display_name="Bob", status=1, avatar_url=None),
+        "workspace_admin",
+        datetime(2026, 4, 11, tzinfo=timezone.utc),
+    )
+
+    class _MM(_StubSession):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, stmt):
+            self.calls += 1
+            result = MagicMock()
+            if self.calls == 1:
+                result.all.return_value = [row]
+            else:
+                result.scalar.return_value = 1
+            return result
+
+    holder["session"] = _MM()
+    with TestClient(app) as c:
+        r = c.get("/api/tenants/5/workspaces/7/members")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 1
+    assert body["items"][0]["email"] == "b@b.com"
+    assert body["items"][0]["role"] == "workspace_admin"

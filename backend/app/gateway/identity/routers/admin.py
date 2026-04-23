@@ -184,3 +184,101 @@ async def get_user(
     )
     role_keys = [r[0] for r in (await session.execute(role_stmt)).all()]
     return _user_row(user, sorted(role_keys))
+
+
+def _workspace_row(w: Workspace, member_count: int) -> dict[str, Any]:
+    return {
+        "id": w.id,
+        "tenant_id": w.tenant_id,
+        "slug": w.slug,
+        "name": w.name,
+        "description": w.description,
+        "created_at": w.created_at.isoformat() if w.created_at else None,
+        "member_count": member_count,
+    }
+
+
+@router.get(
+    "/api/tenants/{tid}/workspaces",
+    dependencies=[Depends(requires("workspace:read", "tenant"))],
+)
+async def list_workspaces(
+    tid: int,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    w_stmt = (
+        select(Workspace)
+        .where(Workspace.tenant_id == tid)
+        .order_by(Workspace.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    workspaces = (await session.execute(w_stmt)).scalars().all()
+
+    count_stmt = select(func.count()).select_from(Workspace).where(Workspace.tenant_id == tid)
+    total = (await session.execute(count_stmt)).scalar() or 0
+
+    ws_ids = [w.id for w in workspaces]
+    if ws_ids:
+        mc_stmt = (
+            select(WorkspaceMember.workspace_id, func.count(WorkspaceMember.user_id))
+            .where(WorkspaceMember.workspace_id.in_(ws_ids))
+            .group_by(WorkspaceMember.workspace_id)
+        )
+        mc_pairs = (await session.execute(mc_stmt)).all()
+    else:
+        mc_pairs = []
+    counts = {wid: int(c) for wid, c in mc_pairs}
+
+    return {
+        "items": [_workspace_row(w, counts.get(w.id, 0)) for w in workspaces],
+        "total": int(total),
+    }
+
+
+@router.get(
+    "/api/tenants/{tid}/workspaces/{wid}/members",
+    dependencies=[Depends(requires("membership:read", "tenant"))],
+)
+async def list_workspace_members(
+    tid: int,
+    wid: int,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    m_stmt = (
+        select(User, Role.role_key, WorkspaceMember.joined_at)
+        .join(WorkspaceMember, WorkspaceMember.user_id == User.id)
+        .join(Role, Role.id == WorkspaceMember.role_id)
+        .where(WorkspaceMember.workspace_id == wid)
+        .order_by(WorkspaceMember.joined_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    rows = (await session.execute(m_stmt)).all()
+
+    count_stmt = (
+        select(func.count())
+        .select_from(WorkspaceMember)
+        .where(WorkspaceMember.workspace_id == wid)
+    )
+    total = (await session.execute(count_stmt)).scalar() or 0
+
+    return {
+        "items": [
+            {
+                "id": u.id,
+                "email": u.email,
+                "display_name": u.display_name,
+                "avatar_url": u.avatar_url,
+                "status": u.status,
+                "role": role_key,
+                "joined_at": joined_at.isoformat() if joined_at else None,
+            }
+            for (u, role_key, joined_at) in rows
+        ],
+        "total": int(total),
+    }
