@@ -282,3 +282,52 @@ async def list_workspace_members(
         ],
         "total": int(total),
     }
+
+
+@router.get(
+    "/api/tenants/{tid}/tokens",
+    dependencies=[Depends(requires("token:read", "tenant"))],
+)
+async def list_tenant_tokens(
+    tid: int,
+    include_revoked: bool = Query(default=False),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    stmt = (
+        select(ApiToken)
+        .where(ApiToken.tenant_id == tid)
+        .order_by(ApiToken.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    if not include_revoked:
+        stmt = stmt.where(ApiToken.revoked_at.is_(None))
+
+    rows = (await session.execute(stmt)).scalars().all()
+
+    count_stmt = select(func.count()).select_from(ApiToken).where(ApiToken.tenant_id == tid)
+    if not include_revoked:
+        count_stmt = count_stmt.where(ApiToken.revoked_at.is_(None))
+    total = (await session.execute(count_stmt)).scalar() or 0
+
+    return {
+        "items": [
+            {
+                "id": t.id,
+                "tenant_id": t.tenant_id,
+                "user_id": t.user_id,
+                "workspace_id": t.workspace_id,
+                "name": t.name,
+                "prefix": t.prefix,
+                "scopes": list(t.scopes or []),
+                "expires_at": t.expires_at.isoformat() if t.expires_at else None,
+                "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
+                "revoked_at": t.revoked_at.isoformat() if t.revoked_at else None,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+            }
+            for t in rows
+        ],
+        "total": int(total),
+    }

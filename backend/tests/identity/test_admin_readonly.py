@@ -330,3 +330,48 @@ def test_list_workspace_members(admin_app):
     assert body["total"] == 1
     assert body["items"][0]["email"] == "b@b.com"
     assert body["items"][0]["role"] == "workspace_admin"
+
+
+def test_list_tenant_tokens(admin_app):
+    app, holder = admin_app
+    holder["identity"] = _identity_for_role("tenant_owner", tenant_id=5)
+    tok = SimpleNamespace(
+        id=100, tenant_id=5, user_id=10, workspace_id=7,
+        name="ci-bot", prefix="dft_abc123", scopes=["skill:invoke"],
+        expires_at=None,
+        last_used_at=datetime(2026, 4, 20, tzinfo=timezone.utc),
+        revoked_at=None,
+        created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+    )
+
+    class _Tok(_StubSession):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, stmt):
+            self.calls += 1
+            result = MagicMock()
+            if self.calls == 1:
+                result.scalars.return_value.all.return_value = [tok]
+            else:
+                result.scalar.return_value = 1
+            return result
+
+    holder["session"] = _Tok()
+    with TestClient(app) as c:
+        r = c.get("/api/tenants/5/tokens")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 1
+    assert body["items"][0]["prefix"] == "dft_abc123"
+    assert body["items"][0]["scopes"] == ["skill:invoke"]
+    assert body["items"][0]["revoked_at"] is None
+
+
+def test_list_tenant_tokens_forbidden_for_member(admin_app):
+    app, holder = admin_app
+    holder["identity"] = _identity_for_role("member", tenant_id=5)
+    with TestClient(app) as c:
+        r = c.get("/api/tenants/5/tokens")
+    assert r.status_code == 403
