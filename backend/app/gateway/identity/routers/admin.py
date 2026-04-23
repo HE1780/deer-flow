@@ -65,3 +65,27 @@ async def list_tenants(
     rows = (await session.execute(stmt)).scalars().all()
     total = (await session.execute(count_stmt)).scalar() or 0
     return {"items": [_tenant_row(t) for t in rows], "total": int(total)}
+
+
+@router.get(
+    "/api/admin/tenants/{tid}",
+    dependencies=[Depends(requires("tenant:read", "platform"))],
+)
+async def get_tenant(
+    tid: int,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    tenant = (await session.execute(select(Tenant).where(Tenant.id == tid))).scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    member_count = (
+        await session.execute(select(func.count()).select_from(Membership).where(Membership.tenant_id == tid))
+    ).scalar() or 0
+    workspace_count = (
+        await session.execute(select(func.count()).select_from(Workspace).where(Workspace.tenant_id == tid))
+    ).scalar() or 0
+    return {
+        **_tenant_row(tenant),
+        "member_count": int(member_count),
+        "workspace_count": int(workspace_count),
+    }

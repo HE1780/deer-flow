@@ -140,3 +140,54 @@ def test_list_tenants_401_when_anonymous(admin_app):
     with TestClient(app) as c:
         r = c.get("/api/admin/tenants")
     assert r.status_code == 401
+
+
+def test_get_tenant_detail_platform_admin(admin_app):
+    app, holder = admin_app
+    holder["identity"] = _identity_for_role("platform_admin", tenant_id=1)
+    t = SimpleNamespace(
+        id=7, slug="acme", name="Acme", plan="pro", status=1,
+        created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+    )
+
+    class _Multi(_StubSession):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, stmt):
+            self.calls += 1
+            result = MagicMock()
+            if self.calls == 1:
+                result.scalar_one_or_none.return_value = t
+            elif self.calls == 2:
+                result.scalar.return_value = 5  # member_count
+            else:
+                result.scalar.return_value = 3  # workspace_count
+            return result
+
+    holder["session"] = _Multi()
+    with TestClient(app) as c:
+        r = c.get("/api/admin/tenants/7")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == 7
+    assert body["slug"] == "acme"
+    assert body["member_count"] == 5
+    assert body["workspace_count"] == 3
+
+
+def test_get_tenant_detail_404_when_missing(admin_app):
+    app, holder = admin_app
+    holder["identity"] = _identity_for_role("platform_admin", tenant_id=1)
+
+    class _None(_StubSession):
+        async def execute(self, stmt):
+            result = MagicMock()
+            result.scalar_one_or_none.return_value = None
+            return result
+
+    holder["session"] = _None()
+    with TestClient(app) as c:
+        r = c.get("/api/admin/tenants/999")
+    assert r.status_code == 404
