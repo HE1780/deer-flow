@@ -160,6 +160,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 event,
                 critical=is_critical_action(event.action, http_method=request.method),
             )
+            _emit_identity_metric(event.action)
         except Exception:
             # Audit must never break the request.
             logger.exception("audit middleware dispatch failed")
@@ -234,3 +235,26 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 except (TypeError, ValueError):
                     return None
         return None
+
+
+def _emit_identity_metric(action: str) -> None:
+    """Mirror auditable actions onto the Prometheus counters.
+
+    We deliberately *mirror* rather than replace: operators who do not
+    scrape ``/metrics`` still get everything from the audit log, and
+    operators who do scrape get the low-cardinality counters this module
+    exposes. Import is local so a metrics-module typo cannot break the
+    audit path.
+    """
+
+    try:
+        from app.gateway.identity.metrics import record_authz_denied, record_login
+    except Exception:  # noqa: BLE001 — metrics are best-effort
+        return
+
+    if action == "user.login.success":
+        record_login(success=True)
+    elif action == "user.login.failure":
+        record_login(success=False)
+    elif action in ("authz.api.denied", "authz.tool.denied"):
+        record_authz_denied()

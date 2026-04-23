@@ -63,3 +63,9 @@ def test_audit_writer_not_started_when_flag_off(client_flag_off):
     from app.gateway.app import app
 
     assert getattr(app.state, "audit_writer", None) is None
+
+
+def test_metrics_route_absent_when_flag_off(client_flag_off):
+    """M7 invariant: /metrics is exposed only when identity is on."""
+    r = client_flag_off.get("/metrics")
+    assert r.status_code == 404, f"/metrics must 404 when ENABLE_IDENTITY=false, got {r.status_code}"
