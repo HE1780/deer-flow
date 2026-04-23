@@ -191,3 +191,76 @@ def test_get_tenant_detail_404_when_missing(admin_app):
     with TestClient(app) as c:
         r = c.get("/api/admin/tenants/999")
     assert r.status_code == 404
+
+
+def test_list_users_allowed_for_tenant_owner(admin_app):
+    app, holder = admin_app
+    holder["identity"] = _identity_for_role("tenant_owner", tenant_id=5)
+    user_row = SimpleNamespace(
+        id=10, email="a@b.com", display_name="Alice", status=1, avatar_url=None,
+        last_login_at=datetime(2026, 4, 15, tzinfo=timezone.utc),
+    )
+
+    class _Users(_StubSession):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, stmt):
+            self.calls += 1
+            result = MagicMock()
+            if self.calls == 1:  # users
+                result.scalars.return_value.all.return_value = [user_row]
+            elif self.calls == 2:  # count
+                result.scalar.return_value = 1
+            elif self.calls == 3:  # role pairs
+                result.all.return_value = [(10, "tenant_owner")]
+            return result
+
+    holder["session"] = _Users()
+    with TestClient(app) as c:
+        r = c.get("/api/tenants/5/users")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 1
+    assert body["items"][0]["email"] == "a@b.com"
+    assert body["items"][0]["roles"] == ["tenant_owner"]
+
+
+def test_list_users_forbidden_for_member(admin_app):
+    app, holder = admin_app
+    holder["identity"] = _identity_for_role("member", tenant_id=5)
+    with TestClient(app) as c:
+        r = c.get("/api/tenants/5/users")
+    assert r.status_code == 403
+
+
+def test_get_user_detail_platform_admin(admin_app):
+    app, holder = admin_app
+    holder["identity"] = _identity_for_role("platform_admin", tenant_id=5)
+    u = SimpleNamespace(
+        id=10, email="a@b.com", display_name="Alice", status=1, avatar_url=None,
+        last_login_at=datetime(2026, 4, 15, tzinfo=timezone.utc),
+    )
+
+    class _One(_StubSession):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, stmt):
+            self.calls += 1
+            result = MagicMock()
+            if self.calls == 1:  # user scalar_one_or_none
+                result.scalar_one_or_none.return_value = u
+            else:  # roles
+                result.all.return_value = [("tenant_owner",), ("member",)]
+            return result
+
+    holder["session"] = _One()
+    with TestClient(app) as c:
+        r = c.get("/api/tenants/5/users/10")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == 10
+    assert set(body["roles"]) == {"tenant_owner", "member"}
