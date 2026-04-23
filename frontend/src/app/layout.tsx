@@ -4,9 +4,9 @@ import "katex/dist/katex.min.css";
 import { type Metadata } from "next";
 
 import { ThemeProvider } from "@/components/theme-provider";
-import { SessionExpiredModal } from "@/core/identity/components/SessionExpiredModal";
 import { I18nProvider } from "@/core/i18n/context";
 import { detectLocaleServer } from "@/core/i18n/server";
+import { SessionExpiredModal } from "@/core/identity/components/SessionExpiredModal";
 
 import { AppProviders } from "./providers";
 

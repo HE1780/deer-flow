@@ -70,7 +70,10 @@ describe("<RequirePermission>", () => {
 
   it("renders loading placeholder while identity is loading", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(
-      () => new Promise(() => {}), // never resolves
+      () =>
+        new Promise(() => {
+          /* never resolves — leaves useQuery in loading state */
+        }),
     );
 
     render(

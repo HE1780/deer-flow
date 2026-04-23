@@ -1,5 +1,5 @@
 // frontend/src/core/identity/fetcher.ts
-import { type IdentityError } from "./types";
+import { type IdentityError, type Permission } from "./types";
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
@@ -15,6 +15,26 @@ export function resetSessionExpiredListeners(): void {
 
 function emitSessionExpired(): void {
   for (const fn of listeners) fn();
+}
+
+/** Error thrown by identityFetch. Carries the IdentityError variant so callers
+ *  can switch on `err.kind`. Extends `Error` so lint rules that require thrown
+ *  values to be Error instances are satisfied. */
+export class IdentityFetchError extends Error {
+  kind: IdentityError["kind"];
+  status?: number;
+  missing?: Permission;
+
+  constructor(err: IdentityError) {
+    super(err.kind);
+    this.name = "IdentityFetchError";
+    this.kind = err.kind;
+    if (err.kind === "forbidden") this.missing = err.missing;
+    if (err.kind === "network") {
+      this.status = err.status;
+      this.message = err.message;
+    }
+  }
 }
 
 export async function identityFetch<T>(
@@ -33,8 +53,7 @@ export async function identityFetch<T>(
 
   if (resp.status === 401) {
     emitSessionExpired();
-    const err: IdentityError = { kind: "unauthenticated" };
-    throw err;
+    throw new IdentityFetchError({ kind: "unauthenticated" });
   }
   if (resp.status === 403) {
     let missing: string | undefined;
@@ -44,17 +63,15 @@ export async function identityFetch<T>(
     } catch {
       // 403 without JSON body is valid; missing stays undefined.
     }
-    const err: IdentityError = { kind: "forbidden", missing };
-    throw err;
+    throw new IdentityFetchError({ kind: "forbidden", missing });
   }
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    const err: IdentityError = {
+    throw new IdentityFetchError({
       kind: "network",
       status: resp.status,
       message: text,
-    };
-    throw err;
+    });
   }
 
   return (await resp.json()) as T;
