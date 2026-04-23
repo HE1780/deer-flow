@@ -37,3 +37,138 @@ export type IdentityError =
   | { kind: "unauthenticated" }
   | { kind: "forbidden"; missing?: Permission }
   | { kind: "network"; status: number; message: string };
+
+// ---------------------------------------------------------------------------
+// A2 admin read shapes — mirror backend response JSON exactly.
+// Sources:
+//   - app/gateway/identity/routers/admin.py (tenants/users/workspaces/tokens)
+//   - app/gateway/identity/routers/roles.py (/api/roles, /api/permissions)
+//   - app/gateway/identity/audit/api.py    (/api/tenants/{tid}/audit)
+// ---------------------------------------------------------------------------
+
+export interface TenantRow {
+  id: number;
+  slug: string;
+  name: string;
+  plan: string;
+  status: number;
+  created_at: string | null;
+}
+
+export interface TenantDetail extends TenantRow {
+  member_count: number;
+  workspace_count: number;
+}
+
+export interface UserRow {
+  id: number;
+  email: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  status: number;
+  last_login_at: string | null;
+  roles: string[];
+}
+
+export interface WorkspaceRow {
+  id: number;
+  tenant_id: number;
+  slug: string;
+  name: string;
+  description: string | null;
+  created_at: string | null;
+  member_count: number;
+}
+
+export interface WorkspaceMemberRow {
+  id: number; // user id
+  email: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  status: number;
+  role: string; // role_key
+  joined_at: string | null;
+}
+
+export interface TokenRow {
+  id: number;
+  tenant_id: number;
+  user_id: number;
+  workspace_id: number | null;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_at: string | null;
+}
+
+// Audit row shape from app/gateway/identity/audit/api.py::_row_to_dict
+export interface AuditRow {
+  id: number;
+  created_at: string | null;
+  tenant_id: number | null;
+  user_id: number | null;
+  workspace_id: number | null;
+  thread_id: string | null;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  ip: string | null;
+  user_agent: string | null;
+  result: "success" | "failure";
+  error_code: string | null;
+  duration_ms: number | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface OffsetListResponse<T> {
+  items: T[];
+  total: number;
+}
+
+export interface CursorListResponse<T> {
+  items: T[];
+  next_cursor: string | null;
+}
+
+// Role row shape (matches backend /api/roles — no id, no permissions array).
+export interface RoleRow {
+  role_key: string;
+  scope: "platform" | "tenant" | "workspace";
+  is_builtin: boolean;
+  display_name: string | null;
+  description: string | null;
+}
+
+export interface RolesResponse {
+  roles: RoleRow[];
+}
+
+// Permission row shape (matches backend /api/permissions — no id).
+export interface PermissionRow {
+  tag: string;
+  scope: "platform" | "tenant" | "workspace";
+  description: string | null;
+}
+
+export interface PermissionsResponse {
+  permissions: PermissionRow[];
+}
+
+export interface AuditFilters {
+  action?: string;
+  user_id?: number;
+  resource_type?: string;
+  result?: "success" | "failure";
+  date_from?: string;
+  date_to?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface SwitchTenantResponse {
+  access_token: string;
+  expires_in: number;
+}
