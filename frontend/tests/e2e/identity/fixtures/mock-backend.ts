@@ -1,6 +1,19 @@
 // frontend/tests/e2e/identity/fixtures/mock-backend.ts
 import { type Page, type Route } from "@playwright/test";
 
+import type {
+  AuditRow,
+  CursorListResponse,
+  OffsetListResponse,
+  RoleRow,
+  TenantDetail,
+  TenantRow,
+  TokenRow,
+  UserRow,
+  WorkspaceMemberRow,
+  WorkspaceRow,
+} from "@/core/identity/types";
+
 export interface MockIdentityOptions {
   authenticated?: boolean;
   permissions?: string[];
@@ -72,4 +85,143 @@ export async function mockIdentity(
       },
     ]);
   }
+}
+
+// ---------------------------------------------------------------------------
+// A2 admin-read route mocks — opt-in per spec via mockAdmin(page, opts).
+// ---------------------------------------------------------------------------
+
+export interface MockAdminOptions {
+  tenants?: OffsetListResponse<TenantRow>;
+  tenantDetail?: Record<number, TenantDetail>;
+  users?: OffsetListResponse<UserRow>;
+  userDetail?: Record<number, UserRow>;
+  workspaces?: OffsetListResponse<WorkspaceRow>;
+  workspaceMembers?: Record<number, OffsetListResponse<WorkspaceMemberRow>>;
+  tokens?: OffsetListResponse<TokenRow>;
+  audit?: CursorListResponse<AuditRow>;
+  auditPage2?: CursorListResponse<AuditRow>; // served when ?cursor= is set
+  roles?: { roles: RoleRow[] };
+}
+
+export async function mockAdmin(
+  page: Page,
+  opts: MockAdminOptions = {},
+): Promise<void> {
+  // /api/admin/tenants/{id} — register BEFORE the list route so the regex
+  // beats the wildcard.
+  await page.route(/\/api\/admin\/tenants\/(\d+)/, (route: Route) => {
+    const id = Number(
+      route
+        .request()
+        .url()
+        .match(/\/tenants\/(\d+)/)?.[1] ?? 0,
+    );
+    const detail = opts.tenantDetail?.[id];
+    return route.fulfill(
+      detail
+        ? {
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify(detail),
+          }
+        : { status: 404, body: "" },
+    );
+  });
+
+  await page.route("**/api/admin/tenants*", (route: Route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(opts.tenants ?? { items: [], total: 0 }),
+    }),
+  );
+
+  // /api/tenants/{tid}/users/{uid} — register before the list route.
+  await page.route(
+    /\/api\/tenants\/(\d+)\/users\/(\d+)/,
+    (route: Route) => {
+      const uid = Number(
+        route
+          .request()
+          .url()
+          .match(/\/users\/(\d+)/)?.[1] ?? 0,
+      );
+      const detail = opts.userDetail?.[uid];
+      return route.fulfill(
+        detail
+          ? {
+              status: 200,
+              contentType: "application/json",
+              body: JSON.stringify(detail),
+            }
+          : { status: 404, body: "" },
+      );
+    },
+  );
+
+  await page.route(/\/api\/tenants\/(\d+)\/users(\?|$)/, (route: Route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(opts.users ?? { items: [], total: 0 }),
+    }),
+  );
+
+  await page.route(
+    /\/api\/tenants\/(\d+)\/workspaces\/(\d+)\/members/,
+    (route: Route) => {
+      const wid = Number(
+        route
+          .request()
+          .url()
+          .match(/\/workspaces\/(\d+)\/members/)?.[1] ?? 0,
+      );
+      const data = opts.workspaceMembers?.[wid] ?? { items: [], total: 0 };
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(data),
+      });
+    },
+  );
+
+  await page.route(
+    /\/api\/tenants\/(\d+)\/workspaces(\?|$)/,
+    (route: Route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(opts.workspaces ?? { items: [], total: 0 }),
+      }),
+  );
+
+  await page.route(/\/api\/tenants\/(\d+)\/tokens/, (route: Route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(opts.tokens ?? { items: [], total: 0 }),
+    }),
+  );
+
+  await page.route(/\/api\/tenants\/(\d+)\/audit/, (route: Route) => {
+    const hasCursor = route.request().url().includes("cursor=");
+    const payload =
+      hasCursor && opts.auditPage2
+        ? opts.auditPage2
+        : (opts.audit ?? { items: [], next_cursor: null });
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+
+  await page.route("**/api/roles", (route: Route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(opts.roles ?? { roles: [] }),
+    }),
+  );
 }
