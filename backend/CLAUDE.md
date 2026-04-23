@@ -430,7 +430,27 @@ Scopes: `"platform"` (permission check only), `"tenant"` (also verifies caller i
 
 **When flag is OFF:** none of the M6 components are imported by lifespan, no batch writer task is spawned, no PG insert is attempted, and `/api/tenants/*/audit*` + `/api/admin/audit` return 404. Verified by `tests/identity/test_feature_flag_offline.py::test_audit_routes_404_when_flag_off`.
 
-**Roadmap:** M1 – M6 shipped. M7 adds the admin UI + migration script. See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
+**M7 migration pipeline (`app/gateway/identity/migration/`):**
+
+The one-shot migration script at `scripts/migrate_to_multitenant.py` walks the three legacy source trees and moves them into the multi-tenant layout established in M4 (spec §10.2).
+
+- `planner.py` — `build_plan(legacy_home, repo_root, tenant_id, workspace_id, ...)` enumerates direct children of `{home}/threads/`, `{repo}/skills/custom/`, `{repo}/skills/user/`, tagging each with `ItemKind` (`THREAD` | `SKILL_CUSTOM` | `SKILL_USER`) and a deterministic `target` derived from the M4 `storage/paths.py` helpers. Items whose source is already a symlink resolving to `target` are marked `already_migrated=True` so re-runs are a safe no-op.
+- `executor.py` — `apply_plan(plan, report_path, *, audit_writer=None, dry_run=False)` iterates the plan, `os.rename`s source → target (falls back to `shutil.move` on `EXDEV`), drops a forwarder symlink at the old path, and verifies byte-count parity. Skill symlinks are validated via `assert_symlink_parent_safe` against `tenant_root(tid)` so a post-rename tamper cannot route to another tenant's subtree. Emits `system.migration.item.moved` audit events (critical=True) when a writer is wired. Report is fsync'd every 50 items so a mid-run crash leaves a partial, readable JSON.
+- `rollback.py` — `rollback_plan(plan, report_path, ...)` reverses the executor: removes the forwarder symlink, renames target → source. Operates on reverse order. Safe to re-run.
+- `report.py` — `MigrationReport` + atomic `write_report(path, report)` (temp file + fsync + replace + dir fsync) with JSON shape `{mode, tenant_id, workspace_id, started_at, ended_at, counts, errors, items[]}`.
+- `lock.py` — `file_lock(path)` uses `fcntl.LOCK_EX | LOCK_NB` on `migration_lock_path()`; `pg_advisory_lock(engine)` holds `pg_try_advisory_lock(hashtext('deerflow_migration'))` for the run so K8s multi-replica invocations fail-fast rather than race. Both raise `LockAcquireError` on contention.
+
+**CLI** at `scripts/migrate_to_multitenant.py` (also wired into `backend/Makefile`):
+
+```bash
+make identity-migrate-dry                      # plan + report, no filesystem writes
+make identity-migrate-apply                    # real migration (takes both locks, writes audit events)
+make identity-migrate-rollback REPORT=<path>   # reverse a prior apply using its report
+```
+
+Exit codes: `0` success, `1` pre-check failure (DB or home not writable), `2` argument error, `3` lock contention, `4` one or more items failed. `--no-db` skips the PG connectivity pre-check and the advisory lock for air-gapped rehearsals; `--legacy-home` + `--repo-root` redirect the source roots for tests. When a DB engine is wired, audit events route to the M6 fallback JSONL at `$DEER_FLOW_HOME/_audit/fallback.jsonl` so the batch writer's next backfill pushes them into Postgres.
+
+**Roadmap:** M1 – M6 shipped. M7 adds the admin UI + migration script (migration landed; admin UI + release parts still open). See `docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`.
 
 ### Model Factory (`packages/harness/deerflow/models/factory.py`)
 
