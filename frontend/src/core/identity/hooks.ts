@@ -1,12 +1,22 @@
 // frontend/src/core/identity/hooks.ts
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { identityApi } from "./api";
 import { identityKeys } from "./query-keys";
-import { type IdentityError, type MeResponse, type Permission } from "./types";
+import {
+  type AuditFilters,
+  type IdentityError,
+  type MeResponse,
+  type Permission,
+} from "./types";
 
 export function useIdentity() {
   const query = useQuery<MeResponse, IdentityError>({
@@ -40,5 +50,140 @@ export function useLogout() {
     onSettled: () => {
       qc.removeQueries({ queryKey: identityKeys.all });
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// A2: admin mutations + list queries
+// ---------------------------------------------------------------------------
+
+export function useSwitchTenant() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (tenantId: number) => identityApi.switchTenant(tenantId),
+    onSuccess: () => {
+      // Identity cookie is re-issued server-side; re-fetch everything identity-scoped.
+      qc.invalidateQueries({ queryKey: identityKeys.all });
+    },
+  });
+}
+
+export function useTenants(
+  params: { q?: string; offset?: number; limit?: number } = {},
+) {
+  return useQuery({
+    queryKey: [...identityKeys.tenants(), params],
+    queryFn: () => identityApi.listTenants(params),
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useTenant(id: number | undefined) {
+  return useQuery({
+    queryKey: id ? identityKeys.tenant(id) : [...identityKeys.tenants(), "disabled"],
+    queryFn: () => identityApi.getTenant(id as number),
+    enabled: !!id,
+  });
+}
+
+export function useUsers(
+  tenantId: number | undefined,
+  params: { q?: string; offset?: number; limit?: number } = {},
+) {
+  return useQuery({
+    queryKey: tenantId
+      ? [...identityKeys.users(tenantId), params]
+      : [...identityKeys.all, "users", "disabled"],
+    queryFn: () => identityApi.listUsers(tenantId as number, params),
+    placeholderData: keepPreviousData,
+    enabled: !!tenantId,
+  });
+}
+
+export function useUser(
+  tenantId: number | undefined,
+  userId: number | undefined,
+) {
+  return useQuery({
+    queryKey:
+      tenantId && userId
+        ? identityKeys.user(tenantId, userId)
+        : [...identityKeys.all, "user", "disabled"],
+    queryFn: () =>
+      identityApi.getUser(tenantId as number, userId as number),
+    enabled: !!tenantId && !!userId,
+  });
+}
+
+export function useWorkspaces(
+  tenantId: number | undefined,
+  params: { offset?: number; limit?: number } = {},
+) {
+  return useQuery({
+    queryKey: tenantId
+      ? [...identityKeys.workspaces(tenantId), params]
+      : [...identityKeys.all, "workspaces", "disabled"],
+    queryFn: () => identityApi.listWorkspaces(tenantId as number, params),
+    placeholderData: keepPreviousData,
+    enabled: !!tenantId,
+  });
+}
+
+export function useWorkspaceMembers(
+  tenantId: number | undefined,
+  wsId: number | undefined,
+  params: { offset?: number; limit?: number } = {},
+) {
+  return useQuery({
+    queryKey:
+      tenantId && wsId
+        ? [...identityKeys.workspaceMembers(tenantId, wsId), params]
+        : [...identityKeys.all, "workspace-members", "disabled"],
+    queryFn: () =>
+      identityApi.listWorkspaceMembers(
+        tenantId as number,
+        wsId as number,
+        params,
+      ),
+    placeholderData: keepPreviousData,
+    enabled: !!tenantId && !!wsId,
+  });
+}
+
+export function useTenantTokens(
+  tenantId: number | undefined,
+  params: { include_revoked?: boolean; offset?: number; limit?: number } = {},
+) {
+  return useQuery({
+    queryKey: tenantId
+      ? [...identityKeys.tokens(), tenantId, params]
+      : [...identityKeys.tokens(), "disabled"],
+    queryFn: () =>
+      identityApi.listTenantTokens(tenantId as number, params),
+    placeholderData: keepPreviousData,
+    enabled: !!tenantId,
+  });
+}
+
+export function useAudit(
+  tenantId: number | undefined,
+  filters: AuditFilters,
+) {
+  const filterKey = JSON.stringify(filters);
+  return useQuery({
+    queryKey: tenantId
+      ? identityKeys.audit(tenantId, filterKey)
+      : [...identityKeys.all, "audit", "disabled"],
+    queryFn: () => identityApi.listAudit(tenantId as number, filters),
+    placeholderData: keepPreviousData,
+    enabled: !!tenantId,
+  });
+}
+
+export function useRoles() {
+  return useQuery({
+    queryKey: identityKeys.roles(),
+    queryFn: () => identityApi.listRoles(),
+    staleTime: 5 * 60_000, // roles rarely change
   });
 }
