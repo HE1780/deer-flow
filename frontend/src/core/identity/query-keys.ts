@@ -22,6 +22,8 @@ export const identityKeys = {
       "members",
     ] as const,
   tokens: () => [...identityKeys.all, "tokens"] as const,
+  myTokens: () => [...identityKeys.all, "me", "tokens"] as const,
+  mySessions: () => [...identityKeys.all, "me", "sessions"] as const,
   audit: (tenantId: number, filters: string) =>
     [...identityKeys.all, "audit", tenantId, filters] as const,
   roles: () => [...identityKeys.all, "roles"] as const,

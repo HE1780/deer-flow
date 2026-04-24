@@ -172,3 +172,62 @@ export interface SwitchTenantResponse {
   access_token: string;
   expires_in: number;
 }
+
+// ---------------------------------------------------------------------------
+// A3 admin write payloads — mirror backend admin_writes.py.
+// ---------------------------------------------------------------------------
+
+export interface CreateUserPayload {
+  email: string;
+  display_name?: string;
+}
+
+export interface AddWorkspaceMemberPayload {
+  user_id: number;
+  role: RoleName;
+}
+
+export interface PatchWorkspaceMemberPayload {
+  role: RoleName;
+}
+
+export interface CreateTenantTokenPayload {
+  name: string;
+  scopes: string[];
+  user_id: number;
+  workspace_id?: number | null;
+  expires_at?: string | null;
+}
+
+export interface CreateTokenResult {
+  id: number;
+  plaintext: string; // shown ONCE — never re-served by the backend
+  prefix: string;
+}
+
+// /api/me/tokens (per-user tokens — distinct from /api/tenants/{tid}/tokens which lists tenant-wide)
+export interface MyTokenRow {
+  id: number;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  workspace_id: number | null;
+  created_at: string | null;
+  expires_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface CreateMyTokenPayload {
+  name: string;
+  scopes: string[];
+  workspace_id?: number | null;
+  expires_at?: string | null;
+}
+
+// /api/me/sessions
+export interface MySessionRow {
+  sid: string;
+  created_at: string | null;
+  ip: string | null;
+  user_agent: string | null;
+}
