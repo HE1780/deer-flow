@@ -23,6 +23,7 @@ from app.gateway.identity.middlewares.identity import IdentityMiddleware
 from app.gateway.identity.middlewares.tenant_scope import install_auto_filter
 from app.gateway.identity.routers import admin as identity_admin_router
 from app.gateway.identity.routers import admin_stub as identity_admin_stub_router
+from app.gateway.identity.routers import admin_writes as identity_admin_writes_router
 from app.gateway.identity.routers import auth as identity_auth_router
 from app.gateway.identity.routers import internal as identity_internal_router
 from app.gateway.identity.routers import me as identity_me_router
@@ -446,6 +447,8 @@ This gateway provides custom endpoints for models, MCP configuration, skills, an
         app.include_router(identity_admin_stub_router.router)
         # M7 A2: admin read endpoints (tenants/users/workspaces/tokens lists+details)
         app.include_router(identity_admin_router.router)
+        # M7 A3: admin write endpoints (create user, workspace member mgmt, tenant tokens)
+        app.include_router(identity_admin_writes_router.router)
         app.include_router(identity_internal_router.router)
         # M6 audit query + export
         app.include_router(identity_audit_router.router)
