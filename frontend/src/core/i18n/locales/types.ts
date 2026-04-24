@@ -373,4 +373,64 @@ export interface Translations {
       emptyDescription: string;
     };
   };
+
+  // M7 A6: identity admin surface (left nav + page titles + key actions).
+  // Inline form copy + dialog descriptions stay English by default — only
+  // the high-frequency labels are localised to keep the translation surface
+  // small. Add more strings when zh-CN ergonomics demand it.
+  admin: {
+    nav: {
+      tenants: string;
+      users: string;
+      roles: string;
+      workspaces: string;
+      tokens: string;
+      audit: string;
+      profile: string;
+    };
+    pages: {
+      tenantsTitle: string;
+      usersTitle: string;
+      rolesTitle: string;
+      workspacesTitle: string;
+      tokensTitle: string;
+      auditTitle: string;
+      profileTitle: string;
+    };
+    actions: {
+      newToken: string;
+      newUser: string;
+      addMember: string;
+      revoke: string;
+      remove: string;
+      cancel: string;
+      confirm: string;
+      copy: string;
+      copied: string;
+      done: string;
+      exportCsv: string;
+      signOut: string;
+    };
+    profile: {
+      tabBasic: string;
+      tabMyTokens: string;
+      tabMySessions: string;
+      activeTenant: string;
+      workspaces: string;
+      permissions: string;
+    };
+    audit: {
+      filterAction: string;
+      filterUserId: string;
+      filterResource: string;
+      filterResult: string;
+      resultAll: string;
+      resultSuccess: string;
+      resultFailure: string;
+      noEvents: string;
+    };
+    tenantSwitcher: {
+      label: string;
+    };
+  };
 }

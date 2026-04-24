@@ -23,6 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useI18n } from "@/core/i18n/hooks";
 import { PermBadge } from "@/core/identity/components/PermBadge";
 import { RequirePermission } from "@/core/identity/components/RequirePermission";
 import {
@@ -46,6 +47,7 @@ export default function TokensPage() {
 
 function Inner() {
   const { identity } = useIdentity();
+  const { t } = useI18n();
   const tid = identity?.active_tenant_id ?? undefined;
   const [offset, setOffset] = useState(0);
   const [includeRevoked, setIncludeRevoked] = useState(false);
@@ -65,7 +67,7 @@ function Inner() {
   return (
     <section className="p-6" data-testid="tokens-page">
       <header className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">API tokens</h1>
+        <h1 className="text-xl font-semibold">{t.admin.pages.tokensTitle}</h1>
         <div className="flex items-center gap-3">
           <label className="flex items-center gap-2 text-sm">
             <input
@@ -81,7 +83,7 @@ function Inner() {
               onClick={() => setCreateOpen(true)}
               data-testid="tokens-new-btn"
             >
-              <PlusIcon className="size-4" /> New token
+              <PlusIcon className="size-4" /> {t.admin.actions.newToken}
             </Button>
           )}
         </div>

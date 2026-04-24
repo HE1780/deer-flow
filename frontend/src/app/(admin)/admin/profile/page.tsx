@@ -25,6 +25,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useI18n } from "@/core/i18n/hooks";
 import {
   useCreateMyToken,
   useIdentity,
@@ -37,6 +38,7 @@ import { type CreateTokenResult } from "@/core/identity/types";
 
 export default function ProfilePage() {
   const { identity, isLoading } = useIdentity();
+  const { t } = useI18n();
 
   if (isLoading) {
     return (
@@ -77,27 +79,27 @@ export default function ProfilePage() {
           href="/logout"
           className="ml-auto inline-flex h-9 items-center rounded-md border px-3 text-sm hover:bg-accent"
         >
-          Sign out
+          {t.admin.actions.signOut}
         </Link>
       </header>
 
       <Tabs defaultValue="basic">
         <TabsList>
           <TabsTrigger value="basic" data-testid="profile-tab-basic">
-            Basic
+            {t.admin.profile.tabBasic}
           </TabsTrigger>
           <TabsTrigger value="tokens" data-testid="profile-tab-tokens">
-            My tokens
+            {t.admin.profile.tabMyTokens}
           </TabsTrigger>
           <TabsTrigger value="sessions" data-testid="profile-tab-sessions">
-            My sessions
+            {t.admin.profile.tabMySessions}
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="basic" className="mt-4 space-y-6">
           <section>
             <h2 className="mb-2 text-sm font-medium uppercase tracking-wide text-muted-foreground">
-              Active tenant
+              {t.admin.profile.activeTenant}
             </h2>
             <p className="text-sm">
               {identity.active_tenant_id != null
@@ -109,7 +111,7 @@ export default function ProfilePage() {
           </section>
           <section>
             <h2 className="mb-2 text-sm font-medium uppercase tracking-wide text-muted-foreground">
-              Workspaces
+              {t.admin.profile.workspaces}
             </h2>
             <ul className="list-disc pl-6 text-sm">
               {identity.workspaces.map((w) => (
@@ -122,7 +124,7 @@ export default function ProfilePage() {
           </section>
           <section>
             <h2 className="mb-2 text-sm font-medium uppercase tracking-wide text-muted-foreground">
-              Permissions
+              {t.admin.profile.permissions}
             </h2>
             <div className="flex flex-wrap gap-1">
               {identity.permissions.map((p) => (

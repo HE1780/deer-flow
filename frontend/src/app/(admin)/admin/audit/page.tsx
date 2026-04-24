@@ -30,6 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useI18n } from "@/core/i18n/hooks";
 import { RequirePermission } from "@/core/identity/components/RequirePermission";
 import { useAudit, useIdentity } from "@/core/identity/hooks";
 import type { AuditFilters, AuditRow } from "@/core/identity/types";
@@ -44,6 +45,7 @@ export default function AuditPage() {
 
 function Inner() {
   const { identity } = useIdentity();
+  const { t } = useI18n();
   const tid = identity?.active_tenant_id ?? undefined;
   const [filters, setFilters] = useState<AuditFilters>({ limit: 50 });
   const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([
@@ -79,10 +81,10 @@ function Inner() {
   return (
     <section className="p-6" data-testid="audit-page">
       <header className="mb-4 flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold">Audit log</h1>
+        <h1 className="text-xl font-semibold">{t.admin.pages.auditTitle}</h1>
         <Input
           aria-label="Filter action"
-          placeholder="Action (e.g. user.login.success)"
+          placeholder={t.admin.audit.filterAction}
           className="w-64"
           value={filters.action ?? ""}
           data-testid="audit-action-filter"
@@ -92,7 +94,7 @@ function Inner() {
         />
         <Input
           aria-label="Filter user id"
-          placeholder="User id"
+          placeholder={t.admin.audit.filterUserId}
           className="w-28"
           type="number"
           min={1}
@@ -105,7 +107,7 @@ function Inner() {
         />
         <Input
           aria-label="Filter resource type"
-          placeholder="Resource type"
+          placeholder={t.admin.audit.filterResource}
           className="w-40"
           value={filters.resource_type ?? ""}
           onChange={(e) =>
@@ -121,12 +123,12 @@ function Inner() {
           }
         >
           <SelectTrigger className="w-40" data-testid="audit-result-filter">
-            <SelectValue placeholder="Result" />
+            <SelectValue placeholder={t.admin.audit.filterResult} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All results</SelectItem>
-            <SelectItem value="success">Success</SelectItem>
-            <SelectItem value="failure">Failure</SelectItem>
+            <SelectItem value="all">{t.admin.audit.resultAll}</SelectItem>
+            <SelectItem value="success">{t.admin.audit.resultSuccess}</SelectItem>
+            <SelectItem value="failure">{t.admin.audit.resultFailure}</SelectItem>
           </SelectContent>
         </Select>
         <Input
@@ -154,7 +156,7 @@ function Inner() {
             className="ml-auto inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
             data-testid="audit-export-link"
           >
-            <DownloadIcon className="size-4" /> Export CSV
+            <DownloadIcon className="size-4" /> {t.admin.actions.exportCsv}
           </a>
         )}
       </header>
@@ -212,7 +214,7 @@ function Inner() {
           {data?.items.length === 0 && !isLoading && (
             <TableRow>
               <TableCell colSpan={5} className="text-muted-foreground">
-                No events match these filters.
+                {t.admin.audit.noEvents}
               </TableCell>
             </TableRow>
           )}
