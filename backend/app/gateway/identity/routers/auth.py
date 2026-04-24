@@ -178,6 +178,22 @@ async def logout(request: Request, response: Response):
     return {"status": "ok"}
 
 
+@router.get("/providers")
+async def list_providers():
+    """Return configured OIDC providers for the login page button list."""
+    rt = get_runtime()
+    return {
+        "providers": [
+            {
+                "id": pid,
+                "display_name": getattr(client, "display_name", pid.title()),
+                "icon_url": getattr(client, "icon_url", None),
+            }
+            for pid, client in rt.oidc_clients.items()
+        ]
+    }
+
+
 # --- helpers ---
 
 

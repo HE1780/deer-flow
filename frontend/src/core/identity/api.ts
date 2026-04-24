@@ -1,0 +1,179 @@
+// frontend/src/core/identity/api.ts
+import { identityFetch } from "./fetcher";
+import {
+  type AddWorkspaceMemberPayload,
+  type AuditFilters,
+  type AuditRow,
+  type CreateMyTokenPayload,
+  type CreateTenantTokenPayload,
+  type CreateTokenResult,
+  type CreateUserPayload,
+  type CursorListResponse,
+  type MeResponse,
+  type MySessionRow,
+  type MyTokenRow,
+  type OffsetListResponse,
+  type PatchWorkspaceMemberPayload,
+  type PermissionsResponse,
+  type ProvidersResponse,
+  type RolesResponse,
+  type SwitchTenantResponse,
+  type TenantDetail,
+  type TenantRow,
+  type TokenRow,
+  type UserRow,
+  type WorkspaceMemberRow,
+  type WorkspaceRow,
+} from "./types";
+
+function qs(params: Record<string, unknown>): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    // Only primitives survive URL encoding; objects would stringify to
+    // "[object Object]" which silently corrupts the query. Skip them.
+    if (typeof v === "string") p.set(k, v);
+    else if (typeof v === "number" || typeof v === "boolean")
+      p.set(k, v.toString());
+  }
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
+export const identityApi = {
+  // --- A1 surface (unchanged) ---
+  me: () => identityFetch<MeResponse>("/api/me"),
+  providers: () => identityFetch<ProvidersResponse>("/api/auth/providers"),
+  logout: () =>
+    identityFetch<{ status: string }>("/api/auth/logout", { method: "POST" }),
+  refresh: () =>
+    identityFetch<{ access_token: string; expires_in: number }>(
+      "/api/auth/refresh",
+      { method: "POST" },
+    ),
+
+  // --- A2: admin reads ---
+  switchTenant: (tenantId: number) =>
+    identityFetch<SwitchTenantResponse>("/api/me/switch-tenant", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: tenantId }),
+    }),
+
+  listTenants: (
+    params: { q?: string; offset?: number; limit?: number } = {},
+  ) =>
+    identityFetch<OffsetListResponse<TenantRow>>(
+      `/api/admin/tenants${qs(params)}`,
+    ),
+  getTenant: (id: number) =>
+    identityFetch<TenantDetail>(`/api/admin/tenants/${id}`),
+
+  listUsers: (
+    tenantId: number,
+    params: { q?: string; offset?: number; limit?: number } = {},
+  ) =>
+    identityFetch<OffsetListResponse<UserRow>>(
+      `/api/tenants/${tenantId}/users${qs(params)}`,
+    ),
+  getUser: (tenantId: number, userId: number) =>
+    identityFetch<UserRow>(`/api/tenants/${tenantId}/users/${userId}`),
+
+  listWorkspaces: (
+    tenantId: number,
+    params: { offset?: number; limit?: number } = {},
+  ) =>
+    identityFetch<OffsetListResponse<WorkspaceRow>>(
+      `/api/tenants/${tenantId}/workspaces${qs(params)}`,
+    ),
+  listWorkspaceMembers: (
+    tenantId: number,
+    wsId: number,
+    params: { offset?: number; limit?: number } = {},
+  ) =>
+    identityFetch<OffsetListResponse<WorkspaceMemberRow>>(
+      `/api/tenants/${tenantId}/workspaces/${wsId}/members${qs(params)}`,
+    ),
+
+  listTenantTokens: (
+    tenantId: number,
+    params: { include_revoked?: boolean; offset?: number; limit?: number } = {},
+  ) =>
+    identityFetch<OffsetListResponse<TokenRow>>(
+      `/api/tenants/${tenantId}/tokens${qs(params)}`,
+    ),
+
+  listAudit: (tenantId: number, filters: AuditFilters = {}) =>
+    identityFetch<CursorListResponse<AuditRow>>(
+      `/api/tenants/${tenantId}/audit${qs(filters as Record<string, unknown>)}`,
+    ),
+
+  listRoles: () => identityFetch<RolesResponse>("/api/roles"),
+  listPermissions: () =>
+    identityFetch<PermissionsResponse>("/api/permissions"),
+
+  // --- A3: admin writes ---
+  createUser: (tenantId: number, payload: CreateUserPayload) =>
+    identityFetch<UserRow>(`/api/tenants/${tenantId}/users`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  addWorkspaceMember: (
+    tenantId: number,
+    wsId: number,
+    payload: AddWorkspaceMemberPayload,
+  ) =>
+    identityFetch<WorkspaceMemberRow>(
+      `/api/tenants/${tenantId}/workspaces/${wsId}/members`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  patchWorkspaceMemberRole: (
+    tenantId: number,
+    wsId: number,
+    userId: number,
+    payload: PatchWorkspaceMemberPayload,
+  ) =>
+    identityFetch<WorkspaceMemberRow>(
+      `/api/tenants/${tenantId}/workspaces/${wsId}/members/${userId}`,
+      { method: "PATCH", body: JSON.stringify(payload) },
+    ),
+  removeWorkspaceMember: (
+    tenantId: number,
+    wsId: number,
+    userId: number,
+  ) =>
+    identityFetch<void>(
+      `/api/tenants/${tenantId}/workspaces/${wsId}/members/${userId}`,
+      { method: "DELETE" },
+    ),
+
+  createTenantToken: (
+    tenantId: number,
+    payload: CreateTenantTokenPayload,
+  ) =>
+    identityFetch<CreateTokenResult>(`/api/tenants/${tenantId}/tokens`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  revokeTenantToken: (tenantId: number, tokenId: number) =>
+    identityFetch<void>(`/api/tenants/${tenantId}/tokens/${tokenId}`, {
+      method: "DELETE",
+    }),
+
+  // --- A4: /api/me/* tokens & sessions ---
+  listMyTokens: () => identityFetch<MyTokenRow[]>("/api/me/tokens"),
+  createMyToken: (payload: CreateMyTokenPayload) =>
+    identityFetch<CreateTokenResult>("/api/me/tokens", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  revokeMyToken: (tokenId: number) =>
+    identityFetch<{ status: string }>(`/api/me/tokens/${tokenId}`, {
+      method: "DELETE",
+    }),
+  listMySessions: () => identityFetch<MySessionRow[]>("/api/me/sessions"),
+  revokeMySession: (sid: string) =>
+    identityFetch<{ status: string }>(`/api/me/sessions/${sid}`, {
+      method: "DELETE",
+    }),
+};
