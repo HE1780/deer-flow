@@ -12,10 +12,16 @@ import { useMemo } from "react";
 import { identityApi } from "./api";
 import { identityKeys } from "./query-keys";
 import {
+  type AddWorkspaceMemberPayload,
   type AuditFilters,
+  type CreateMyTokenPayload,
+  type CreateTenantTokenPayload,
+  type CreateUserPayload,
   type IdentityError,
   type MeResponse,
+  type PatchWorkspaceMemberPayload,
   type Permission,
+  type RoleName,
 } from "./types";
 
 export function useIdentity() {
@@ -185,5 +191,179 @@ export function useRoles() {
     queryKey: identityKeys.roles(),
     queryFn: () => identityApi.listRoles(),
     staleTime: 5 * 60_000, // roles rarely change
+  });
+}
+
+// ---------------------------------------------------------------------------
+// A3: admin write mutations (create user, workspace member CRUD, token CRUD)
+// ---------------------------------------------------------------------------
+
+export function useCreateUser(tenantId: number | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: CreateUserPayload) => {
+      if (!tenantId) throw new Error("no active tenant");
+      return identityApi.createUser(tenantId, payload);
+    },
+    onSuccess: () => {
+      if (tenantId) {
+        void qc.invalidateQueries({ queryKey: identityKeys.users(tenantId) });
+      }
+    },
+  });
+}
+
+export function useAddWorkspaceMember(
+  tenantId: number | undefined,
+  wsId: number | undefined,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: AddWorkspaceMemberPayload) => {
+      if (!tenantId || !wsId) throw new Error("missing tenant or workspace");
+      return identityApi.addWorkspaceMember(tenantId, wsId, payload);
+    },
+    onSuccess: () => {
+      if (tenantId && wsId) {
+        void qc.invalidateQueries({
+          queryKey: identityKeys.workspaceMembers(tenantId, wsId),
+        });
+        void qc.invalidateQueries({
+          queryKey: identityKeys.workspaces(tenantId),
+        });
+      }
+    },
+  });
+}
+
+export function usePatchWorkspaceMemberRole(
+  tenantId: number | undefined,
+  wsId: number | undefined,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      userId,
+      role,
+    }: {
+      userId: number;
+      role: RoleName;
+    }) => {
+      if (!tenantId || !wsId) throw new Error("missing tenant or workspace");
+      return identityApi.patchWorkspaceMemberRole(tenantId, wsId, userId, {
+        role,
+      } satisfies PatchWorkspaceMemberPayload);
+    },
+    onSuccess: () => {
+      if (tenantId && wsId) {
+        void qc.invalidateQueries({
+          queryKey: identityKeys.workspaceMembers(tenantId, wsId),
+        });
+      }
+    },
+  });
+}
+
+export function useRemoveWorkspaceMember(
+  tenantId: number | undefined,
+  wsId: number | undefined,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: number) => {
+      if (!tenantId || !wsId) throw new Error("missing tenant or workspace");
+      return identityApi.removeWorkspaceMember(tenantId, wsId, userId);
+    },
+    onSuccess: () => {
+      if (tenantId && wsId) {
+        void qc.invalidateQueries({
+          queryKey: identityKeys.workspaceMembers(tenantId, wsId),
+        });
+        void qc.invalidateQueries({
+          queryKey: identityKeys.workspaces(tenantId),
+        });
+      }
+    },
+  });
+}
+
+export function useCreateTenantToken(tenantId: number | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: CreateTenantTokenPayload) => {
+      if (!tenantId) throw new Error("no active tenant");
+      return identityApi.createTenantToken(tenantId, payload);
+    },
+    onSuccess: () => {
+      if (tenantId) {
+        void qc.invalidateQueries({ queryKey: identityKeys.tokens() });
+      }
+    },
+  });
+}
+
+export function useRevokeTenantToken(tenantId: number | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (tokenId: number) => {
+      if (!tenantId) throw new Error("no active tenant");
+      return identityApi.revokeTenantToken(tenantId, tokenId);
+    },
+    onSuccess: () => {
+      if (tenantId) {
+        void qc.invalidateQueries({ queryKey: identityKeys.tokens() });
+      }
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// A4: /api/me/{tokens,sessions} for the Profile page
+// ---------------------------------------------------------------------------
+
+export function useMyTokens(enabled = true) {
+  return useQuery({
+    queryKey: identityKeys.myTokens(),
+    queryFn: () => identityApi.listMyTokens(),
+    enabled,
+  });
+}
+
+export function useCreateMyToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: CreateMyTokenPayload) =>
+      identityApi.createMyToken(payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: identityKeys.myTokens() });
+    },
+  });
+}
+
+export function useRevokeMyToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (tokenId: number) => identityApi.revokeMyToken(tokenId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: identityKeys.myTokens() });
+    },
+  });
+}
+
+export function useMySessions(enabled = true) {
+  return useQuery({
+    queryKey: identityKeys.mySessions(),
+    queryFn: () => identityApi.listMySessions(),
+    enabled,
+  });
+}
+
+export function useRevokeMySession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (sid: string) => identityApi.revokeMySession(sid),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: identityKeys.mySessions() });
+    },
   });
 }

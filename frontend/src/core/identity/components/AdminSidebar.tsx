@@ -4,30 +4,37 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { useI18n } from "@/core/i18n/hooks";
+import type { Translations } from "@/core/i18n/locales/types";
 import { cn } from "@/lib/utils";
 
 import { useIdentity } from "../hooks";
 
 interface Item {
   href: string;
-  label: string;
+  labelKey: keyof Translations["admin"]["nav"];
   requires?: string; // permission tag
   platformOnly?: true;
 }
 
 const ITEMS: Item[] = [
-  { href: "/admin/profile", label: "Profile" },
-  { href: "/admin/tenants", label: "Tenants", platformOnly: true },
-  { href: "/admin/users", label: "Users", requires: "membership:read" },
-  { href: "/admin/roles", label: "Roles" }, // any authenticated user
-  { href: "/admin/workspaces", label: "Workspaces", requires: "workspace:read" },
-  { href: "/admin/tokens", label: "Tokens", requires: "token:read" },
-  { href: "/admin/audit", label: "Audit", requires: "audit:read" },
+  { href: "/admin/profile", labelKey: "profile" },
+  { href: "/admin/tenants", labelKey: "tenants", platformOnly: true },
+  { href: "/admin/users", labelKey: "users", requires: "membership:read" },
+  { href: "/admin/roles", labelKey: "roles" }, // any authenticated user
+  {
+    href: "/admin/workspaces",
+    labelKey: "workspaces",
+    requires: "workspace:read",
+  },
+  { href: "/admin/tokens", labelKey: "tokens", requires: "token:read" },
+  { href: "/admin/audit", labelKey: "audit", requires: "audit:read" },
 ];
 
 export function AdminSidebar() {
   const { identity } = useIdentity();
   const pathname = usePathname();
+  const { t } = useI18n();
 
   const platformRoles = identity?.roles?.platform ?? [];
   const visible = ITEMS.filter((i) => {
@@ -51,7 +58,7 @@ export function AdminSidebar() {
               active && "bg-accent font-medium",
             )}
           >
-            {i.label}
+            {t.admin.nav[i.labelKey]}
           </Link>
         );
       })}

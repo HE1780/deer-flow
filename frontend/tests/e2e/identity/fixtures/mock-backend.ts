@@ -222,3 +222,237 @@ export async function mockAdmin(
     }),
   );
 }
+
+// ---------------------------------------------------------------------------
+// A3 admin-write + A4 me-tokens/sessions route mocks. Each call records the
+// last request body so tests can assert payloads. Pass `{ ok: false }` to make
+// a route return 4xx.
+// ---------------------------------------------------------------------------
+
+export interface MockWritesRecorder {
+  createUser: { body: unknown }[];
+  addMember: { body: unknown }[];
+  patchMember: { body: unknown }[];
+  removeMember: { url: string }[];
+  createTenantToken: { body: unknown }[];
+  revokeTenantToken: { url: string }[];
+  createMyToken: { body: unknown }[];
+  revokeMyToken: { url: string }[];
+  revokeMySession: { url: string }[];
+}
+
+export interface MockWritesOptions {
+  failCreateUser?: boolean;
+  myTokens?: Array<{
+    id: number;
+    name: string;
+    prefix: string;
+    scopes: string[];
+    workspace_id: number | null;
+    created_at: string | null;
+    expires_at: string | null;
+    last_used_at: string | null;
+  }>;
+  mySessions?: Array<{
+    sid: string;
+    created_at: string | null;
+    ip: string | null;
+    user_agent: string | null;
+  }>;
+}
+
+export async function mockWrites(
+  page: Page,
+  opts: MockWritesOptions = {},
+): Promise<MockWritesRecorder> {
+  const rec: MockWritesRecorder = {
+    createUser: [],
+    addMember: [],
+    patchMember: [],
+    removeMember: [],
+    createTenantToken: [],
+    revokeTenantToken: [],
+    createMyToken: [],
+    revokeMyToken: [],
+    revokeMySession: [],
+  };
+
+  await page.route(
+    /\/api\/tenants\/(\d+)\/users$/,
+    async (route: Route) => {
+      const req = route.request();
+      if (req.method() === "POST") {
+        const body = req.postDataJSON?.() ?? null;
+        rec.createUser.push({ body });
+        if (opts.failCreateUser) {
+          return route.fulfill({
+            status: 409,
+            contentType: "application/json",
+            body: JSON.stringify({ detail: "already a member" }),
+          });
+        }
+        return route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: 999,
+            email: (body as { email?: string } | null)?.email ?? "x@y.com",
+            display_name: null,
+            avatar_url: null,
+            status: 1,
+            last_login_at: null,
+          }),
+        });
+      }
+      return route.fallback();
+    },
+  );
+
+  await page.route(
+    /\/api\/tenants\/(\d+)\/workspaces\/(\d+)\/members\/(\d+)$/,
+    async (route: Route) => {
+      const req = route.request();
+      if (req.method() === "PATCH") {
+        const body = req.postDataJSON?.() ?? null;
+        rec.patchMember.push({ body });
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: 11,
+            email: "b@b.com",
+            display_name: "Bob",
+            avatar_url: null,
+            status: 1,
+            role: (body as { role?: string } | null)?.role ?? "member",
+            joined_at: null,
+          }),
+        });
+      }
+      if (req.method() === "DELETE") {
+        rec.removeMember.push({ url: req.url() });
+        return route.fulfill({ status: 204, body: "" });
+      }
+      return route.fallback();
+    },
+  );
+
+  await page.route(
+    /\/api\/tenants\/(\d+)\/workspaces\/(\d+)\/members$/,
+    async (route: Route) => {
+      const req = route.request();
+      if (req.method() === "POST") {
+        const body = req.postDataJSON?.() ?? null;
+        rec.addMember.push({ body });
+        return route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: (body as { user_id?: number } | null)?.user_id ?? 11,
+            email: "b@b.com",
+            display_name: "Bob",
+            avatar_url: null,
+            status: 1,
+            role: (body as { role?: string } | null)?.role ?? "member",
+            joined_at: null,
+          }),
+        });
+      }
+      return route.fallback();
+    },
+  );
+
+  await page.route(
+    /\/api\/tenants\/(\d+)\/tokens\/(\d+)$/,
+    async (route: Route) => {
+      const req = route.request();
+      if (req.method() === "DELETE") {
+        rec.revokeTenantToken.push({ url: req.url() });
+        return route.fulfill({ status: 204, body: "" });
+      }
+      return route.fallback();
+    },
+  );
+  await page.route(
+    /\/api\/tenants\/(\d+)\/tokens$/,
+    async (route: Route) => {
+      const req = route.request();
+      if (req.method() === "POST") {
+        const body = req.postDataJSON?.() ?? null;
+        rec.createTenantToken.push({ body });
+        return route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: 200,
+            plaintext: "dft_PLAINTEXT_ONLY_ONCE_xyz",
+            prefix: "dft_PLAINTEX",
+          }),
+        });
+      }
+      return route.fallback();
+    },
+  );
+
+  await page.route(/\/api\/me\/tokens(\/(\d+))?$/, async (route: Route) => {
+    const req = route.request();
+    const url = req.url();
+    const idMatch = /\/tokens\/(\d+)$/.exec(url);
+    if (req.method() === "GET" && !idMatch) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(opts.myTokens ?? []),
+      });
+    }
+    if (req.method() === "POST" && !idMatch) {
+      const body = req.postDataJSON?.() ?? null;
+      rec.createMyToken.push({ body });
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 300,
+          plaintext: "dft_MY_PLAINTEXT_abc",
+          prefix: "dft_MY_PLAIN",
+        }),
+      });
+    }
+    if (req.method() === "DELETE" && idMatch) {
+      rec.revokeMyToken.push({ url });
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "revoked" }),
+      });
+    }
+    return route.fallback();
+  });
+
+  await page.route(
+    /\/api\/me\/sessions(\/[A-Za-z0-9_-]+)?$/,
+    async (route: Route) => {
+      const req = route.request();
+      const url = req.url();
+      const sidMatch = /\/sessions\/([A-Za-z0-9_-]+)$/.exec(url);
+      if (req.method() === "GET" && !sidMatch) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(opts.mySessions ?? []),
+        });
+      }
+      if (req.method() === "DELETE" && sidMatch) {
+        rec.revokeMySession.push({ url });
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ status: "revoked" }),
+        });
+      }
+      return route.fallback();
+    },
+  );
+
+  return rec;
+}
