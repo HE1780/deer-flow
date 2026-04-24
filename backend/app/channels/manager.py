@@ -349,6 +349,10 @@ def _resolve_attachments(thread_id: str, artifacts: list[str]) -> list[ResolvedA
             logger.warning("[Manager] rejected non-outputs artifact path: %s", virtual_path)
             continue
         try:
+            # TODO(m5-identity): thread identity through to the channel resolver so
+            # tenant-stratified paths are honoured here. For M4 the inbound-message
+            # pipeline has no resolved Identity (channel auth is platform-specific),
+            # so we keep the legacy single-tenant path — behaviour preserved exactly.
             actual = paths.resolve_virtual_path(thread_id, virtual_path)
             # Verify the resolved path is actually under the outputs directory
             # (guards against path-traversal even after prefix check)

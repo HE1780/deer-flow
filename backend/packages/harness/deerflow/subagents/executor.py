@@ -137,6 +137,7 @@ class SubagentExecutor:
         thread_data: ThreadDataState | None = None,
         thread_id: str | None = None,
         trace_id: str | None = None,
+        identity: Any = None,
     ):
         """Initialize the executor.
 
@@ -148,12 +149,18 @@ class SubagentExecutor:
             thread_data: Thread data from parent agent.
             thread_id: Thread ID for sandbox operations.
             trace_id: Trace ID from parent for distributed tracing.
+            identity: Parent agent's identity (M5). Passed through into
+                the subagent's initial state so its guardrail middleware
+                sees the same user / tenant / permissions. Opaque ``Any``
+                because the harness must not import the Gateway
+                :class:`Identity` dataclass.
         """
         self.config = config
         self.parent_model = parent_model
         self.sandbox_state = sandbox_state
         self.thread_data = thread_data
         self.thread_id = thread_id
+        self.identity = identity
         # Generate trace_id if not provided (for top-level calls)
         self.trace_id = trace_id or str(uuid.uuid4())[:8]
 
@@ -202,6 +209,13 @@ class SubagentExecutor:
             state["sandbox"] = self.sandbox_state
         if self.thread_data is not None:
             state["thread_data"] = self.thread_data
+        # M5: carry parent identity into subagent state so the subagent's
+        # IdentityGuardrailMiddleware sees it directly — no HMAC
+        # round-trip needed for intra-process delegation. The subagent's
+        # IdentityMiddleware detects the pre-populated state and does not
+        # overwrite it.
+        if self.identity is not None:
+            state["identity"] = self.identity
 
         return state
 

@@ -9,6 +9,35 @@ VIRTUAL_PATH_PREFIX = "/mnt/user-data"
 _SAFE_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
 
+def _require_positive_tenant_or_workspace(name: str, value: int) -> None:
+    """Raise ``ValueError`` unless ``value`` is a positive ``int``.
+
+    Mirrors the rigor used by ``app.gateway.identity.storage.paths`` (kept
+    duplicated here deliberately — the harness boundary forbids importing the
+    app-side module). ``bool`` is rejected because ``True`` would otherwise
+    pass as ``1``.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive int, got {value!r}")
+
+
+def _is_tenant_scoped(tenant_id: int | None, workspace_id: int | None) -> bool:
+    """Return True iff both tenant_id and workspace_id are positive ints.
+
+    Any other combination (either value ``None``, zero, negative, or a
+    non-int like ``bool``) means the caller should fall back to the legacy
+    non-stratified path. Both values must be present to form a tenant-aware
+    path — a tenant id alone is insufficient.
+    """
+    if tenant_id is None or workspace_id is None:
+        return False
+    if isinstance(tenant_id, bool) or isinstance(workspace_id, bool):
+        return False
+    if not isinstance(tenant_id, int) or not isinstance(workspace_id, int):
+        return False
+    return tenant_id > 0 and workspace_id > 0
+
+
 def _default_local_base_dir() -> Path:
     """Return the repo-local DeerFlow state directory without relying on cwd."""
     backend_dir = Path(__file__).resolve().parents[4]
@@ -245,7 +274,240 @@ class Paths:
         if thread_dir.exists():
             shutil.rmtree(thread_dir)
 
-    def resolve_virtual_path(self, thread_id: str, virtual_path: str) -> Path:
+    # ── Tenant-stratified paths (M4 storage isolation) ──────────────────
+    #
+    # The methods below layer tenant/workspace isolation on top of the legacy
+    # single-tenant layout. They **never** replace the legacy helpers — flag-off
+    # callers keep the old behavior verbatim, while identity-aware callers
+    # (middlewares reading `state["identity"]`) get stratified paths.
+    #
+    # Layout (host side) when tenant_id + workspace_id are both supplied:
+    #     {base_dir}/tenants/{tenant_id}/workspaces/{workspace_id}/threads/{thread_id}/
+    #         └── user-data/                  <-- mounted as /mnt/user-data/
+    #             ├── workspace/              <-- /mnt/user-data/workspace/
+    #             ├── uploads/                <-- /mnt/user-data/uploads/
+    #             └── outputs/                <-- /mnt/user-data/outputs/
+    #         └── acp-workspace/              <-- /mnt/acp-workspace/
+    #
+    # The sandbox virtual prefix (``/mnt/user-data``) is unchanged — only the
+    # host side gets the tenant/workspace nesting.
+
+    def tenant_thread_dir(self, tenant_id: int, workspace_id: int, thread_id: str) -> Path:
+        """Host path for a tenant/workspace-stratified thread directory.
+
+        Layout: ``{base_dir}/tenants/{tenant_id}/workspaces/{workspace_id}/threads/{thread_id}/``
+
+        Raises:
+            ValueError: If ``tenant_id`` or ``workspace_id`` is not a positive
+                        ``int``, or if ``thread_id`` contains unsafe characters.
+        """
+        _require_positive_tenant_or_workspace("tenant_id", tenant_id)
+        _require_positive_tenant_or_workspace("workspace_id", workspace_id)
+        return (
+            self.base_dir
+            / "tenants"
+            / str(tenant_id)
+            / "workspaces"
+            / str(workspace_id)
+            / "threads"
+            / _validate_thread_id(thread_id)
+        )
+
+    def resolve_thread_dir(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> Path:
+        """Return the tenant-stratified thread dir when both ids are supplied.
+
+        Falls back to the legacy :meth:`thread_dir` when either ``tenant_id``
+        or ``workspace_id`` is missing / non-positive. Keeping the fallback
+        inline (rather than raising) lets middleware code use one resolver
+        regardless of whether identity is populated.
+        """
+        if _is_tenant_scoped(tenant_id, workspace_id):
+            return self.tenant_thread_dir(tenant_id, workspace_id, thread_id)  # type: ignore[arg-type]
+        return self.thread_dir(thread_id)
+
+    def resolve_sandbox_user_data_dir(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> Path:
+        """Tenant-aware host path for the ``user-data`` root."""
+        return self.resolve_thread_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id) / "user-data"
+
+    def resolve_sandbox_work_dir(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> Path:
+        """Tenant-aware host path for ``user-data/workspace``."""
+        return self.resolve_sandbox_user_data_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id) / "workspace"
+
+    def resolve_sandbox_uploads_dir(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> Path:
+        """Tenant-aware host path for ``user-data/uploads``."""
+        return self.resolve_sandbox_user_data_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id) / "uploads"
+
+    def resolve_sandbox_outputs_dir(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> Path:
+        """Tenant-aware host path for ``user-data/outputs``."""
+        return self.resolve_sandbox_user_data_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id) / "outputs"
+
+    def resolve_acp_workspace_dir(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> Path:
+        """Tenant-aware host path for the ACP workspace root."""
+        return self.resolve_thread_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id) / "acp-workspace"
+
+    def ensure_thread_dirs_for(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> None:
+        """Create the tenant-aware thread directories (or legacy if no identity).
+
+        Mirrors :meth:`ensure_thread_dirs` — directories are created with
+        mode 0o777 so that sandbox containers running as a different UID can
+        still write to volume-mounted paths.
+        """
+        for d in [
+            self.resolve_sandbox_work_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id),
+            self.resolve_sandbox_uploads_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id),
+            self.resolve_sandbox_outputs_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id),
+            self.resolve_acp_workspace_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id),
+        ]:
+            d.mkdir(parents=True, exist_ok=True)
+            d.chmod(0o777)
+
+    # ── Host-side (raw string) variants for Docker bind mounts ──────────
+
+    def host_tenant_thread_dir(self, tenant_id: int, workspace_id: int, thread_id: str) -> str:
+        """Host-side raw string form of :meth:`tenant_thread_dir`.
+
+        Preserves Windows path syntax for Docker Desktop on Windows, matching
+        the behaviour of :meth:`host_thread_dir`.
+        """
+        _require_positive_tenant_or_workspace("tenant_id", tenant_id)
+        _require_positive_tenant_or_workspace("workspace_id", workspace_id)
+        return _join_host_path(
+            self._host_base_dir_str(),
+            "tenants",
+            str(tenant_id),
+            "workspaces",
+            str(workspace_id),
+            "threads",
+            _validate_thread_id(thread_id),
+        )
+
+    def resolve_host_thread_dir(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> str:
+        """Tenant-aware host string path for a thread directory."""
+        if _is_tenant_scoped(tenant_id, workspace_id):
+            return self.host_tenant_thread_dir(tenant_id, workspace_id, thread_id)  # type: ignore[arg-type]
+        return self.host_thread_dir(thread_id)
+
+    def resolve_host_sandbox_user_data_dir(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> str:
+        """Tenant-aware host string path for the ``user-data`` mount source."""
+        return _join_host_path(
+            self.resolve_host_thread_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id),
+            "user-data",
+        )
+
+    def resolve_host_sandbox_work_dir(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> str:
+        """Tenant-aware host string path for the ``workspace`` mount source."""
+        return _join_host_path(
+            self.resolve_host_sandbox_user_data_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id),
+            "workspace",
+        )
+
+    def resolve_host_sandbox_uploads_dir(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> str:
+        """Tenant-aware host string path for the ``uploads`` mount source."""
+        return _join_host_path(
+            self.resolve_host_sandbox_user_data_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id),
+            "uploads",
+        )
+
+    def resolve_host_sandbox_outputs_dir(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> str:
+        """Tenant-aware host string path for the ``outputs`` mount source."""
+        return _join_host_path(
+            self.resolve_host_sandbox_user_data_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id),
+            "outputs",
+        )
+
+    def resolve_host_acp_workspace_dir(
+        self,
+        thread_id: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> str:
+        """Tenant-aware host string path for the ACP workspace mount source."""
+        return _join_host_path(
+            self.resolve_host_thread_dir(thread_id, tenant_id=tenant_id, workspace_id=workspace_id),
+            "acp-workspace",
+        )
+
+    def resolve_virtual_path(
+        self,
+        thread_id: str,
+        virtual_path: str,
+        *,
+        tenant_id: int | None = None,
+        workspace_id: int | None = None,
+    ) -> Path:
         """Resolve a sandbox virtual path to the actual host filesystem path.
 
         Args:
@@ -253,6 +515,13 @@ class Paths:
             virtual_path: Virtual path as seen inside the sandbox, e.g.
                           ``/mnt/user-data/outputs/report.pdf``.
                           Leading slashes are stripped before matching.
+            tenant_id: Optional tenant ID (M4 storage isolation). Combined with
+                ``workspace_id``, routes the resolved path under
+                ``tenants/{tenant_id}/workspaces/{workspace_id}/threads/.../user-data``.
+                When either id is missing, falls back to the legacy
+                ``threads/{thread_id}/user-data`` base so flag-off callers see
+                unchanged behaviour.
+            workspace_id: Optional workspace ID (pair with ``tenant_id``).
 
         Returns:
             The resolved absolute host filesystem path.
@@ -270,7 +539,9 @@ class Paths:
             raise ValueError(f"Path must start with /{prefix}")
 
         relative = stripped[len(prefix) :].lstrip("/")
-        base = self.sandbox_user_data_dir(thread_id).resolve()
+        base = self.resolve_sandbox_user_data_dir(
+            thread_id, tenant_id=tenant_id, workspace_id=workspace_id
+        ).resolve()
         actual = (base / relative).resolve()
 
         try:

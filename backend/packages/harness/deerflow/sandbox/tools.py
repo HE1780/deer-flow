@@ -857,8 +857,16 @@ def ensure_sandbox_initialized(runtime: ToolRuntime[ContextT, ThreadState] | Non
     if thread_id is None:
         raise SandboxRuntimeError("Thread ID not available in runtime context")
 
+    # Read identity defensively — same pattern as ThreadDataMiddleware and
+    # SandboxMiddleware. Falls back to legacy single-tenant layout when
+    # identity is absent (flag-off / legacy mode).
+    from deerflow.agents.middlewares._identity import extract_tenant_ids
+
+    identity = runtime.state.get("identity") if hasattr(runtime.state, "get") else None
+    tenant_id, workspace_id = extract_tenant_ids(identity)
+
     provider = get_sandbox_provider()
-    sandbox_id = provider.acquire(thread_id)
+    sandbox_id = provider.acquire(thread_id, tenant_id=tenant_id, workspace_id=workspace_id)
 
     # Update runtime state - this persists across tool calls
     runtime.state["sandbox"] = {"sandbox_id": sandbox_id}

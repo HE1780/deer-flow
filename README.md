@@ -202,6 +202,47 @@ That prompt is intended for coding agents. It tells the agent to clone the repo 
 
    </details>
 
+#### Optional: Enterprise Identity (Preview)
+
+DeerFlow includes an opt-in enterprise identity subsystem (multi-tenant, RBAC, audit). It is **off by default** — current single-user installations behave exactly as before.
+
+To enable:
+
+1. Provision Postgres 16 + Redis 7 (`docker/docker-compose.yaml` ships both as optional services).
+2. Run migrations: `cd backend && make db-upgrade`
+3. Set env vars:
+   - `ENABLE_IDENTITY=true`
+   - `DEERFLOW_DATABASE_URL=postgresql+asyncpg://...`
+   - `DEERFLOW_REDIS_URL=redis://...`
+   - `DEERFLOW_BOOTSTRAP_ADMIN_EMAIL=you@example.com` (optional — creates the first platform admin)
+4. **Configure OIDC providers** (M2): copy `config/identity.yaml.example` to `config/identity.yaml` and fill in at least one provider (Okta, Azure AD, Keycloak, …). `$VAR` references are resolved against the environment, so credentials stay in your env file.
+5. **Generate JWT keys** (M2): `cd backend && make identity-keys` writes a 2048-bit RS256 keypair to `$DEERFLOW_HOME/_system/jwt_{private,public}.pem` (0600/0644). The gateway will generate them on first start if absent, but running the target explicitly is safer for production.
+6. **Pick your storage root** (M4, optional): tenant-isolated filesystem state lives under `$DEER_FLOW_HOME` (default: `backend/.deer-flow`). Override it per-deployment — for example `DEER_FLOW_HOME=/var/lib/deerflow` — when you want the tenant tree on a dedicated volume. Bootstrap the directory layout for a new tenant/workspace with:
+   ```bash
+   cd backend && make identity-dirs TENANT_ID=<id> [WORKSPACE_ID=<id>]
+   ```
+   The target is idempotent and creates every directory with `0700` permissions. Layout:
+   ```
+   $DEER_FLOW_HOME/
+     tenants/{tenant_id}/
+       custom/                             # tenant-scoped skills
+       users/{user_id}/memory.json         # per-user memory
+       workspaces/{workspace_id}/
+         user/                             # workspace user-tier skills
+         threads/{thread_id}/
+           user-data/{workspace,uploads,outputs}
+           acp-workspace/
+     skills/public/                        # cross-tenant shared skills
+     _system/{audit_fallback,audit_archive,...}
+   ```
+7. Start the gateway normally. Bootstrap runs idempotently at startup.
+
+Once enabled, users sign in at `/api/auth/oidc/{provider}/login`, receive an HttpOnly `deerflow_session` cookie, and can manage their session + API tokens under `/api/me/*`. M3 adds route-level RBAC (the `@requires(tag, scope)` dependency), a SQLAlchemy auto-filter that scopes every query to the caller's tenant/workspace, and the read-only `/api/roles` + `/api/permissions` endpoints used by UI guards. M4 adds per-tenant/workspace storage isolation: sandbox bind mounts, thread data, uploads, artifacts, and tenant-scoped skills are all physically separated under `$DEER_FLOW_HOME`, with cross-tenant access rejected at the Gateway (`403 Access denied`) and at the sandbox mount / path-guard layers.
+
+**Audit (M6):** every authenticated write, every authorization denial, every login/logout, and every tool denial reported by the LangGraph runtime is captured by the `AuditMiddleware` + `AuditBatchWriter` pipeline and persisted to `identity.audit_logs`. `GET /api/tenants/{tid}/audit` returns paginated rows (default 7-day / max 90-day window, base64url cursor); `GET /api/tenants/{tid}/audit/export` streams CSV (hard-capped at 100k rows). Sensitive fields (passwords, tokens, secrets, request bodies) are scrubbed before enqueue; `write_file` calls keep `path`+`size` only. When Postgres is unreachable, **critical** events (logins, RBAC denies, role grants) fall back to `$DEER_FLOW_HOME/_audit/fallback.jsonl` and are backfilled on the next successful flush — non-critical events are dropped with a metric. The `audit_logs` table is locked down at the DB layer: the `deerflow` app role only has `INSERT, SELECT` (the alembic migration `20260421_0003_audit_grants.py` enforces this; superuser deploys aren't affected by GRANT). Run `app.gateway.identity.audit.retention.run_retention_job(...)` (or wire it via `start_retention_task`) to archive rows older than 90 days into gzip JSONL under `{archive_dir}/{tenant_id}/{yyyy-mm}.jsonl.gz` and delete them from PG.
+
+Full roadmap and design: [`docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md`](docs/superpowers/specs/2026-04-21-deerflow-identity-foundation-design.md).
+
 ### Running the Application
 
 #### Deployment Sizing

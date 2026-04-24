@@ -38,3 +38,57 @@ jobs:
       - name: Run unit tests of backend
         working-directory: backend
         run: make test
+
+  backend-identity-tests:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: deerflow
+          POSTGRES_USER: deerflow
+          POSTGRES_PASSWORD: deerflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U deerflow -d deerflow"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --group dev
+      - name: Run alembic up/down smoke
+        working-directory: backend
+        env:
+          DEERFLOW_DATABASE_URL: postgresql+asyncpg://deerflow:deerflow@localhost:5432/deerflow
+        run: |
+          PYTHONPATH=. uv run alembic upgrade head
+          PYTHONPATH=. uv run alembic downgrade base
+      - name: Run identity tests
+        working-directory: backend
+        env:
+          DEERFLOW_DATABASE_URL: postgresql+asyncpg://deerflow:deerflow@localhost:5432/deerflow
+          DEERFLOW_REDIS_URL: redis://localhost:6379/0
+          IDENTITY_TEST_BACKEND: "on"
+        run: PYTHONPATH=. uv run pytest tests/identity/ -v --tb=short

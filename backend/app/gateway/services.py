@@ -171,6 +171,84 @@ def build_run_config(
 # ---------------------------------------------------------------------------
 
 
+def _extract_workspace_id_for_run(request: Request, config: dict[str, Any]) -> int | None:
+    """Best-effort active-workspace resolution.
+
+    The active workspace (the ``X-Deerflow-Workspace-Id`` header) is the
+    one the run belongs to. Priority order:
+
+    1. Explicit ``configurable["workspace_id"]`` from the client
+    2. Path parameter on the originating request (``/tenants/{tid}/workspaces/{wid}/...``)
+    3. Identity's first workspace membership (most runs today don't know
+       which workspace they belong to and legacy routes set nothing)
+
+    Returns ``None`` when nothing resolves — the signer accepts that and
+    omits the workspace header, which the harness side treats as "no
+    active workspace" (IdentityMiddleware still populates identity).
+    """
+    configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
+    explicit = configurable.get("workspace_id") if isinstance(configurable, dict) else None
+    if isinstance(explicit, int):
+        return explicit
+    if isinstance(explicit, str) and explicit.isdigit():
+        return int(explicit)
+
+    path_params = getattr(request, "path_params", None) or {}
+    for candidate in ("workspace_id", "wid", "ws_id"):
+        raw = path_params.get(candidate) if isinstance(path_params, dict) else None
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str) and raw.isdigit():
+            return int(raw)
+
+    identity = getattr(request.state, "identity", None)
+    workspace_ids = getattr(identity, "workspace_ids", ()) if identity is not None else ()
+    if workspace_ids:
+        return workspace_ids[0]
+
+    return None
+
+
+def _inject_identity_headers(config: dict[str, Any], request: Request) -> None:
+    """Sign and stash identity headers under ``configurable["headers"]``.
+
+    The LangGraph-side :class:`IdentityMiddleware` reads that slot to
+    populate ``state["identity"]``. Silently no-ops in any of:
+
+    * Identity subsystem disabled
+    * Signing key not configured
+    * Caller is anonymous (no identity middleware ran, or failed to resolve)
+    """
+    # Local import keeps lifespan bootstrap order flexible (identity
+    # settings read env vars that aren't always set at module import).
+    from app.gateway.identity.propagation import sign_identity_headers as _sign
+    from app.gateway.identity.settings import get_identity_settings as _get_settings
+
+    settings = _get_settings()
+    if not settings.enabled or not settings.internal_signing_key:
+        return
+
+    identity = getattr(request.state, "identity", None)
+    if identity is None or not getattr(identity, "is_authenticated", False):
+        return
+
+    workspace_id = _extract_workspace_id_for_run(request, config)
+    headers = _sign(
+        identity,
+        workspace_id=workspace_id,
+        key=settings.internal_signing_key,
+    )
+
+    configurable = config.setdefault("configurable", {})
+    # Preserve any headers already in place (unlikely but non-destructive)
+    existing = configurable.get("headers")
+    if isinstance(existing, dict):
+        merged = {**existing, **headers}
+    else:
+        merged = headers
+    configurable["headers"] = merged
+
+
 async def _upsert_thread_in_store(store, thread_id: str, metadata: dict | None) -> None:
     """Create or refresh the thread record in the Store.
 
@@ -305,6 +383,15 @@ async def start_run(
         for key in _CONTEXT_CONFIGURABLE_KEYS:
             if key in context:
                 configurable.setdefault(key, context[key])
+
+    # M5: inject HMAC-signed identity headers into ``configurable["headers"]``
+    # so the LangGraph-side IdentityMiddleware sees the caller. Safe no-op
+    # when the flag is off, identity is anonymous, or the signing key is
+    # unset. Failures here must not break runs — log and continue.
+    try:
+        _inject_identity_headers(config, request)
+    except Exception:  # pragma: no cover - defensive; tested separately
+        logger.exception("Failed to inject identity headers into run config")
 
     stream_modes = normalize_stream_modes(body.stream_mode)
 
